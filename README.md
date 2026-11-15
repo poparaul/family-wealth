@@ -30,7 +30,14 @@ Notă: `appDataFolder` aparține unui singur cont Google. Pentru aceleași date 
 | `js/calculators.js` | Splitting, conversii valutare, zile rămase, alerte |
 | `sw.js` | Cache offline (network-first pentru app, cache-first pentru CDN) |
 
+## Parole pe profil
+Fiecare membru poate avea o parolă (Membri → 🔑, sau 🔑 din antet pentru propriul profil). Se salvează doar hash-ul PBKDF2-SHA256 cu salt aleator, în `family_members[].auth`, care se sincronizează în Drive. Adminul poate reseta parola oricui. Parola blochează interfața, nu criptează datele.
+
+## Analiză avere
+Pagina „Analiză avere” filtrează pe membri, categorii și moneda de afișare și grupează pe membri, categorii, instituție, monedă, într-o matrice membri × categorii sau într-o listă cu căutare, sortare și export CSV.
+
 ## Câmpuri adăugate la schemă (opționale, compatibile)
+- `family_members[].auth` — `{ algo, iter, salt, hash }` pentru parola profilului
 - `children_savings[].balance_history` — istoricul soldului pentru grafic
 - `children_savings[].tracker_year` — resetarea anuală a `yearly_deposited`
 - `government_bonus_tracker.bonus_amount` — implicit 600

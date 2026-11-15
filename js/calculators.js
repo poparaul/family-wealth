@@ -4,12 +4,16 @@
 
   const DOC_LABELS = { rca: 'RCA', rovinieta: 'Rovinietă', itp: 'ITP', casco: 'CASCO' };
 
+  // Paletă categorială validată (CVD-safe), ordine fixă — culoarea urmează entitatea, nu rangul.
+  const PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
+  const OTHER_COLOR = '#8a8a86';
+
   const CATEGORIES = {
-    investment_accounts:   { label: 'Investiții',     color: '#0d9488' },
-    grandparents_accounts: { label: 'Conturi bunici', color: '#6366f1' },
-    real_estate:           { label: 'Imobiliare',     color: '#f59e0b' },
-    children_savings:      { label: 'Economii copii', color: '#ec4899' },
-    vehicles:              { label: 'Vehicule',       color: '#64748b' }
+    investment_accounts:   { label: 'Investiții',     color: PALETTE[0] },
+    grandparents_accounts: { label: 'Conturi bunici', color: PALETTE[1] },
+    real_estate:           { label: 'Imobiliare',     color: PALETTE[2] },
+    children_savings:      { label: 'Economii copii', color: PALETTE[3] },
+    vehicles:              { label: 'Vehicule',       color: PALETTE[4] }
   };
 
   const DEFAULT_BONUS = 600;
@@ -100,6 +104,7 @@
       cat: 'investment_accounts', id: a.id,
       label: [a.platform, a.account_type].filter(Boolean).join(' — '),
       value: toBase(a.total_value, a.currency, m), raw: num(a.total_value), currency: a.currency,
+      institution: a.platform || 'Necunoscut',
       holders: fromSplits(a.splits)
     }));
 
@@ -107,6 +112,7 @@
       cat: 'grandparents_accounts', id: a.id,
       label: [a.bank_name, a.account_type].filter(Boolean).join(' — '),
       value: toBase(a.principal_amount, a.currency, m), raw: num(a.principal_amount), currency: a.currency,
+      institution: a.bank_name || 'Necunoscut',
       holders: a.splits && a.splits.length ? fromSplits(a.splits) : one(a.owner_id)
     }));
 
@@ -115,6 +121,7 @@
       out.push({
         cat: 'real_estate', id: a.id, label: a.title,
         value: toBase(num(a.estimated_value) * share, a.currency, m), raw: num(a.estimated_value) * share, currency: a.currency,
+        institution: 'Proprietăți imobiliare',
         holders: one(a.owner_id)
       });
     });
@@ -122,16 +129,35 @@
     (data.children_savings || []).forEach((a) => out.push({
       cat: 'children_savings', id: a.id, label: a.account_type,
       value: toBase(a.current_balance, a.currency, m), raw: num(a.current_balance), currency: a.currency,
+      institution: /trez/i.test(a.account_type || '') ? 'Trezoreria Statului' : (a.account_type || 'Economii copii'),
       holders: one(a.child_id)
     }));
 
     (data.vehicles || []).forEach((a) => out.push({
       cat: 'vehicles', id: a.id, label: [a.name, a.plate_number].filter(Boolean).join(' · '),
       value: toBase(a.estimated_market_value, a.currency, m), raw: num(a.estimated_market_value), currency: a.currency,
+      institution: 'Autovehicule',
       holders: one(a.owner_id)
     }));
 
+    out.forEach((a) => { if (!a.currency) a.currency = baseCurrency(m); });
     return out;
+  }
+
+  /** Un rând pentru fiecare (activ × deținător), plus partea nealocată. Baza pentru filtrare și grupare. */
+  const UNALLOCATED = '__unallocated';
+  function shareRows(data) {
+    const rows = [];
+    assets(data).forEach((a) => {
+      const base = { assetId: a.id, cat: a.cat, label: a.label, institution: a.institution, currency: a.currency, assetValue: a.value };
+      let alloc = 0;
+      a.holders.forEach((h) => {
+        alloc += h.pct;
+        rows.push(Object.assign({}, base, { member_id: h.member_id, pct: h.pct, value: (a.value * h.pct) / 100 }));
+      });
+      if (alloc < 99.99) rows.push(Object.assign({}, base, { member_id: UNALLOCATED, pct: 100 - alloc, value: (a.value * (100 - alloc)) / 100 }));
+    });
+    return rows;
   }
 
   function netWorth(data) {
@@ -239,8 +265,8 @@
   }
 
   global.Calc = {
-    DOC_LABELS, CATEGORIES, DEFAULT_BONUS, num,
-    baseCurrency, rateKnown, toBase,
+    DOC_LABELS, CATEGORIES, PALETTE, OTHER_COLOR, UNALLOCATED, DEFAULT_BONUS, num,
+    baseCurrency, rateKnown, toBase, shareRows,
     splitsTotal, validateSplits, equalSplit,
     todayISO, monthKey, parseDate, daysUntil, alertLevel,
     assets, netWorth, memberAssets,

@@ -11,8 +11,8 @@
     GOOGLE_CLIENT_ID: ''
   };
 
-  const LS = { DATA: 'fw_data', PROFILE: 'fw_profile', SETTINGS: 'fw_settings' };
-  const SS_UNLOCK = 'fw_admin_unlocked';
+  const LS = { DATA: 'fw_data', PROFILE: 'fw_profile', SETTINGS: 'fw_settings', ANALYSIS: 'fw_analysis' };
+  const SS_UNLOCK = 'fw_unlocked_profile'; // profilul deblocat cu parolă în sesiunea curentă de browser
 
   const ROLE_LABELS = { admin: 'Administrator', viewer: 'Vizualizare', viewer_restricted: 'Modul Copil' };
   const ROLE_HINTS = {
@@ -20,10 +20,11 @@
     viewer: 'Vede doar activele la care participă',
     viewer_restricted: 'Vede doar propria pușculiță'
   };
-  const MEMBER_COLORS = ['#0d9488', '#6366f1', '#ec4899', '#f59e0b', '#0ea5e9', '#84cc16', '#a855f7', '#ef4444', '#14b8a6', '#64748b'];
+  const MEMBER_COLORS = Calc.PALETTE; // al 9-lea membru și următorii primesc gri („Alții”), nu o nuanță generată
 
   const NAV_ADMIN = [
     { id: 'dashboard', label: 'Panou', icon: '📊' },
+    { id: 'analysis', label: 'Analiză avere', icon: '🔎' },
     { id: 'investments', label: 'Investiții', icon: '📈' },
     { id: 'grandparents', label: 'Conturi Bunici', icon: '🏦' },
     { id: 'realestate', label: 'Imobiliare', icon: '🏡' },
@@ -35,6 +36,7 @@
   ];
   const NAV_VIEWER = [
     { id: 'dashboard', label: 'Partea mea', icon: '📊' },
+    { id: 'analysis', label: 'Analiză', icon: '🔎' },
     { id: 'myassets', label: 'Activele mele', icon: '📁' }
   ];
 
@@ -123,23 +125,39 @@
   function ssGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
   function ssSet(k, v) { try { v == null ? sessionStorage.removeItem(k) : sessionStorage.setItem(k, v); } catch (e) { /* ignore */ } }
 
-  async function hashPin(pin) {
-    const text = 'fw-pin:' + pin;
-    if (window.crypto && crypto.subtle) {
-      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-      return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
-    }
-    let h = 0; for (let i = 0; i < text.length; i++) h = (Math.imul(31, h) + text.charCodeAt(i)) | 0;
-    return 'x' + (h >>> 0).toString(16);
+  /* ---------- Parole per membru (PBKDF2-SHA256 + salt aleator) ----------
+     Hash-ul e salvat în family_members[].auth și se sincronizează în Drive,
+     deci parola e aceeași pe toate dispozitivele. Blochează interfața; nu criptează datele. */
+  const PBKDF2_ITER = 150000;
+  const MIN_PASSWORD = 4;
+  const cryptoOk = () => !!(window.crypto && crypto.subtle && crypto.getRandomValues);
+  const toHex = (buf) => Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  const fromHex = (h) => new Uint8Array((h.match(/../g) || []).map((x) => parseInt(x, 16)));
+
+  async function derive(password, salt, iter) {
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: iter }, key, 256);
+    return toHex(bits);
   }
+  async function makeAuth(password) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    return { algo: 'PBKDF2-SHA256', iter: PBKDF2_ITER, salt: toHex(salt), hash: await derive(password, salt, PBKDF2_ITER) };
+  }
+  async function checkAuth(password, auth) {
+    if (!auth) return true;
+    if (!cryptoOk()) return false;
+    return (await derive(password, fromHex(auth.salt), auth.iter || PBKDF2_ITER)) === auth.hash;
+  }
+  let failedAttempts = 0;
 
   /* ======================================================================
      STATE
      ====================================================================== */
   const settings = Object.assign(
-    { clientId: '', driveConnected: false, adminPinHash: null, lastSync: null },
+    { clientId: '', driveConnected: false, lastSync: null },
     loadJSON(LS.SETTINGS, {})
   );
+  delete settings.adminPinHash; // înlocuit de parolele per membru
   const saveSettings = () => saveJSON(LS.SETTINGS, settings);
   const clientId = () => settings.clientId || CONFIG.GOOGLE_CLIENT_ID;
 
@@ -158,7 +176,7 @@
   const money = (v, cur) => Calc.formatMoney(v, cur || baseCur());
   const member = (id) => D().family_members.find((m) => m.id === id);
   const memberName = (id) => (member(id) ? member(id).name : 'Membru șters');
-  const memberColor = (id) => { const i = D().family_members.findIndex((m) => m.id === id); return i < 0 ? '#94a3b8' : MEMBER_COLORS[i % MEMBER_COLORS.length]; };
+  const memberColor = (id) => { const i = D().family_members.findIndex((m) => m.id === id); return i < 0 || i >= MEMBER_COLORS.length ? Calc.OTHER_COLOR : MEMBER_COLORS[i]; };
   const currentMember = () => (state.profileId ? member(state.profileId) : null);
   const isAdmin = () => { const m = currentMember(); return !!m && m.role === 'admin'; };
 
@@ -758,7 +776,7 @@
         ${ms.map((m) => `<button data-action="selectProfile" data-id="${esc(m.id)}" class="card card-hover flex flex-col items-center gap-3 py-6">
           ${avatar(m, 'w-16 h-16 text-2xl')}
           <span class="font-semibold text-center">${esc(m.name)}</span>
-          <span class="text-xs text-slate-500">${ROLE_LABELS[m.role] || m.role}${m.role === 'admin' && settings.adminPinHash ? ' 🔒' : ''}</span>
+          <span class="text-xs text-slate-500">${ROLE_LABELS[m.role] || m.role}${m.auth ? ' · 🔒 parolă' : ''}</span>
         </button>`).join('')}
       </div>
       <p class="text-xs text-slate-400 mt-10 text-center max-w-md">Datele sunt stocate local pe acest dispozitiv și, opțional, în folderul privat al aplicației din Google Drive-ul tău.</p>
@@ -776,6 +794,7 @@
           <p class="text-xs text-slate-500 truncate">${esc(me.name)} · ${ROLE_LABELS[me.role]}</p>
         </div>
         <div id="sync-badge">${syncBadgeHtml()}</div>
+        <button data-action="ownPassword" class="btn-ghost btn-sm" title="${me.auth ? 'Schimbă parola' : 'Setează o parolă'}" aria-label="Parola mea">🔑</button>
         <button data-action="switchProfile" class="btn-secondary btn-sm" title="Schimbă profilul">${avatar(me, 'w-6 h-6 text-xs')}<span class="hidden sm:inline">Schimbă</span></button>
       </div>
       <nav class="max-w-6xl mx-auto px-2 flex gap-1 overflow-x-auto no-scrollbar" aria-label="Module">
@@ -834,7 +853,7 @@
           <p class="text-teal-100 text-sm">Avere netă totală a familiei</p>
           <p class="text-4xl sm:text-5xl font-bold mt-1 tabular-nums">${money(nw.total)}</p>
           <p class="text-teal-100 text-sm mt-1">${nw.assets.length} active · EUR ${M().exchange_rates.EUR || '—'} · USD ${M().exchange_rates.USD || '—'}</p>
-          ${nw.total > 0 ? `<div class="flex h-3 rounded-full overflow-hidden mt-5 bg-white/10">${cats.map((c) => `<div title="${Calc.CATEGORIES[c].label}" style="width:${(nw.byCat[c] / nw.total) * 100}%;background:${Calc.CATEGORIES[c].color}"></div>`).join('')}</div>
+          ${nw.total > 0 ? `<div class="flex h-3 gap-[2px] rounded-full overflow-hidden mt-5">${cats.map((c) => `<div data-tip="${Calc.CATEGORIES[c].label} · ${esc(money(nw.byCat[c]))} · ${Math.round((nw.byCat[c] / nw.total) * 100)}%" style="flex:${nw.byCat[c]} 0 0;background:${Calc.CATEGORIES[c].color}"></div>`).join('')}</div>
           <ul class="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 mt-4 text-sm">${cats.map((c) => `<li class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full shrink-0 ring-2 ring-white/40" style="background:${Calc.CATEGORIES[c].color}"></span><span class="truncate">${Calc.CATEGORIES[c].label}</span><span class="ml-auto tabular-nums text-teal-50">${Math.round((nw.byCat[c] / nw.total) * 100)}%</span></li>`).join('')}</ul>` : ''}
           ${missingRates.length ? `<p class="mt-4 text-sm bg-rose-500/30 rounded-lg px-3 py-2">⚠ ${missingRates.length} active au monede fără curs de schimb și nu sunt incluse. Adaugă cursul în Setări.</p>` : ''}
           ${nw.unallocated > 0.5 ? `<p class="mt-2 text-sm text-teal-100">Nealocat pe membri: ${money(nw.unallocated)}</p>` : ''}
@@ -845,9 +864,10 @@
         </section>
       </div>
       <section class="card mt-4">
-        <h3 class="font-semibold mb-4">Defalcare pe membri (Account Splitting)</h3>
+        <div class="flex items-center justify-between gap-3 mb-4"><h3 class="font-semibold">Defalcare pe membri (Account Splitting)</h3>
+          <button data-action="nav" data-view="analysis" class="btn-ghost btn-sm">🔎 Analiză detaliată →</button></div>
         <ul class="space-y-4">${members.map(({ m, v }) => `<li>
-          <div class="flex items-center gap-3">${avatar(m, 'w-8 h-8 text-sm')}
+          <div class="flex items-center gap-3 cursor-pointer rounded-lg hover:bg-slate-50 -m-1 p-1" data-action="analyzeMember" data-value="${esc(m.id)}" title="Analizează averea lui ${esc(m.name)}">${avatar(m, 'w-8 h-8 text-sm')}
             <div class="flex-1 min-w-0"><div class="flex justify-between gap-2"><span class="font-medium truncate">${esc(m.name)}</span><span class="font-semibold tabular-nums">${money(v)}</span></div>
             <div class="mt-1.5">${progressBar((v / maxV) * 100, memberColor(m.id), 'h-2')}</div>
             <p class="text-xs text-slate-500 mt-1">${nw.total ? ((v / nw.total) * 100).toFixed(1) : 0}% din total · ${Calc.memberAssets(D(), m.id).length} active</p></div>
@@ -903,6 +923,230 @@
             </div></article>`;
         }).join('')}</div></section>`).join('');
   }
+
+  /* ---------- Analiză avere (filtre + mai multe vizualizări) ---------- */
+  const analysis = Object.assign(
+    { members: [], cats: [], currency: 'RON', group: 'member', sortKey: 'value', sortDir: 'desc', search: '' },
+    loadJSON(LS.ANALYSIS, {}),
+    { search: '' }
+  );
+  const saveAnalysis = () => { try { localStorage.setItem(LS.ANALYSIS, JSON.stringify(Object.assign({}, analysis, { search: '' }))); } catch (e) { /* ignore */ } };
+
+  const GROUPS = [
+    { id: 'member', label: 'Pe membri', admin: true },
+    { id: 'category', label: 'Pe categorii' },
+    { id: 'matrix', label: 'Matrice', admin: true },
+    { id: 'institution', label: 'Pe instituție' },
+    { id: 'currency', label: 'Pe monedă' },
+    { id: 'list', label: 'Listă active' }
+  ];
+
+  const dispCur = () => (currencies().includes(analysis.currency) && Calc.rateKnown(analysis.currency, M()) ? analysis.currency : baseCur());
+  const conv = (v) => { const c = dispCur(); return c === baseCur() ? v : v / +M().exchange_rates[c]; };
+  const dmoney = (v) => Calc.formatMoney(conv(v), dispCur());
+  const pctTxt = (v, total) => (total ? `${((v / total) * 100).toFixed(1)}%` : '0%');
+
+  function analysisMembers() {
+    if (!isAdmin()) return [state.profileId];
+    return analysis.members.filter((id) => id === Calc.UNALLOCATED || member(id));
+  }
+
+  function analysisRows() {
+    let rows = Calc.shareRows(D());
+    const mems = analysisMembers();
+    if (mems.length) rows = rows.filter((r) => mems.includes(r.member_id));
+    if (analysis.cats.length) rows = rows.filter((r) => analysis.cats.includes(r.cat));
+    return rows;
+  }
+
+  function groupMeta(dim, key) {
+    if (dim === 'member') return key === Calc.UNALLOCATED ? { label: 'Nealocat', color: Calc.OTHER_COLOR } : { label: memberName(key), color: memberColor(key) };
+    if (dim === 'category') return Calc.CATEGORIES[key];
+    if (dim === 'currency') { const i = currencies().indexOf(key); return { label: key, color: i >= 0 && i < Calc.PALETTE.length ? Calc.PALETTE[i] : Calc.OTHER_COLOR }; }
+    return { label: key, color: '#2a78d6' }; // instituții: o singură nuanță; identitatea e dată de etichetă
+  }
+
+  function groupBy(rows, dim) {
+    const keyOf = { member: (r) => r.member_id, category: (r) => r.cat, currency: (r) => r.currency, institution: (r) => r.institution }[dim];
+    const map = new Map();
+    rows.forEach((r) => {
+      const k = keyOf(r);
+      const g = map.get(k) || { key: k, value: 0, assets: new Set() };
+      g.value += r.value; g.assets.add(r.assetId);
+      map.set(k, g);
+    });
+    return [...map.values()].sort((a, b) => b.value - a.value);
+  }
+
+  function chip(action, value, label, on, color) {
+    return `<button data-action="${action}" data-value="${esc(value)}" class="chip ${on ? 'chip-on' : ''}" aria-pressed="${on}">
+      ${color ? `<span class="w-2.5 h-2.5 rounded-sm shrink-0" style="background:${color}"></span>` : ''}${esc(label)}</button>`;
+  }
+
+  /** Bară 100% compusă (cu goluri de 2px între segmente) — partea din întreg. */
+  function compositionBar(groups, total, dim) {
+    if (!total) return '';
+    return `<div class="flex h-4 gap-[2px] rounded overflow-hidden" role="img" aria-label="Compoziție">
+      ${groups.filter((g) => g.value > 0).map((g) => { const m = groupMeta(dim, g.key); return `<div class="h-4 first:rounded-l last:rounded-r" style="flex:${g.value} 0 0;background:${m.color}" data-tip="${esc(m.label)} · ${esc(dmoney(g.value))} · ${pctTxt(g.value, total)}"></div>`; }).join('')}
+    </div>`;
+  }
+
+  /** Bare orizontale sortate, cu etichete directe (nume, valoare, %) — servesc și ca tabel. */
+  function barList(groups, total, dim) {
+    if (!groups.length) return '<p class="text-sm text-slate-500">Niciun rezultat pentru filtrele alese.</p>';
+    const max = Math.max(...groups.map((g) => g.value), 1);
+    return `<ul class="space-y-3.5">${groups.map((g) => {
+      const m = groupMeta(dim, g.key);
+      const drill = dim === 'member' && g.key !== Calc.UNALLOCATED ? `data-action="drillMember" data-value="${esc(g.key)}"`
+        : dim === 'category' ? `data-action="drillCategory" data-value="${esc(g.key)}"` : '';
+      return `<li>
+        <${drill ? 'button' : 'div'} ${drill} class="w-full text-left group" data-tip="${esc(m.label)} · ${esc(dmoney(g.value))} · ${pctTxt(g.value, total)} · ${g.assets.size} active">
+          <div class="flex justify-between gap-3 text-sm">
+            <span class="flex items-center gap-2 min-w-0"><span class="w-2.5 h-2.5 rounded-sm shrink-0" style="background:${m.color}"></span>
+              <span class="truncate font-medium ${drill ? 'group-hover:underline' : ''}">${esc(m.label)}</span><span class="text-slate-400 text-xs whitespace-nowrap">${g.assets.size} active</span></span>
+            <span class="tabular-nums font-semibold whitespace-nowrap">${dmoney(g.value)} <span class="text-slate-500 font-normal w-12 inline-block text-right">${pctTxt(g.value, total)}</span></span>
+          </div>
+          <div class="mt-1.5 h-2.5 rounded-r bg-slate-100"><div class="h-2.5 rounded-r" style="width:${Math.max(0.5, (g.value / max) * 100)}%;background:${m.color}"></div></div>
+        </${drill ? 'button' : 'div'}></li>`;
+    }).join('')}</ul>`;
+  }
+
+  /** Matrice membri × categorii cu nuanțare secvențială (o singură nuanță, deschis→închis). */
+  function matrixHtml(rows) {
+    const mems = [...new Set(rows.map((r) => r.member_id))]
+      .sort((a, b) => sum(rows.filter((r) => r.member_id === b).map((r) => r.value)) - sum(rows.filter((r) => r.member_id === a).map((r) => r.value)));
+    const cats = Object.keys(Calc.CATEGORIES).filter((c) => rows.some((r) => r.cat === c));
+    if (!mems.length) return '<p class="text-sm text-slate-500">Niciun rezultat pentru filtrele alese.</p>';
+    const cell = (m, c) => sum(rows.filter((r) => r.member_id === m && r.cat === c).map((r) => r.value));
+    const max = Math.max(1, ...mems.flatMap((m) => cats.map((c) => cell(m, c))));
+    const total = sum(rows.map((r) => r.value));
+    const name = (m) => (m === Calc.UNALLOCATED ? 'Nealocat' : memberName(m));
+    return `<div class="overflow-x-auto -mx-1"><table class="matrix w-full text-sm">
+      <thead><tr><th class="text-left">Membru</th>${cats.map((c) => `<th><span class="inline-flex items-center gap-1.5"><span class="w-2 h-2 rounded-sm" style="background:${Calc.CATEGORIES[c].color}"></span>${Calc.CATEGORIES[c].label}</span></th>`).join('')}<th>Total</th></tr></thead>
+      <tbody>${mems.map((m) => {
+        const rowTotal = sum(cats.map((c) => cell(m, c)));
+        return `<tr><th class="text-left font-medium whitespace-nowrap">${esc(name(m))}</th>
+          ${cats.map((c) => { const v = cell(m, c); const t = v / max; return `<td style="${v ? `background:rgba(42,120,214,${(0.08 + 0.82 * t).toFixed(3)});color:${t > 0.8 ? '#fff' : '#0f172a'}` : ''}" data-tip="${esc(name(m))} · ${esc(Calc.CATEGORIES[c].label)} · ${esc(dmoney(v))}">${v ? dmoney(v) : '<span class="text-slate-300">—</span>'}</td>`; }).join('')}
+          <td class="font-semibold">${dmoney(rowTotal)}<div class="text-xs text-slate-500 font-normal">${pctTxt(rowTotal, total)}</div></td></tr>`;
+      }).join('')}</tbody>
+      <tfoot><tr><th class="text-left">Total</th>${cats.map((c) => `<td>${dmoney(sum(rows.filter((r) => r.cat === c).map((r) => r.value)))}</td>`).join('')}<td>${dmoney(total)}</td></tr></tfoot>
+    </table></div>`;
+  }
+
+  function listItems(rows) {
+    const map = new Map();
+    rows.forEach((r) => {
+      const it = map.get(r.assetId) || { id: r.assetId, label: r.label, cat: r.cat, institution: r.institution, currency: r.currency, assetValue: r.assetValue, value: 0, holders: [] };
+      it.value += r.value;
+      it.holders.push(`${r.member_id === Calc.UNALLOCATED ? 'Nealocat' : memberName(r.member_id)} ${Math.round(r.pct * 100) / 100}%`);
+      map.set(r.assetId, it);
+    });
+    const q = analysis.search.trim().toLowerCase();
+    let items = [...map.values()];
+    if (q) items = items.filter((i) => `${i.label} ${i.institution} ${i.holders.join(' ')}`.toLowerCase().includes(q));
+    const dir = analysis.sortDir === 'asc' ? 1 : -1;
+    const k = analysis.sortKey;
+    items.sort((a, b) => {
+      const va = k === 'value' ? a.value : k === 'cat' ? Calc.CATEGORIES[a.cat].label : (a[k] || '').toString();
+      const vb = k === 'value' ? b.value : k === 'cat' ? Calc.CATEGORIES[b.cat].label : (b[k] || '').toString();
+      return (typeof va === 'number' ? va - vb : va.localeCompare(vb, 'ro')) * dir;
+    });
+    return items;
+  }
+
+  function listTableHtml(rows) {
+    const items = listItems(rows);
+    const th = (key, label, cls = '') => `<th class="${cls}"><button data-action="sortList" data-value="${key}" class="inline-flex items-center gap-1 font-semibold hover:text-slate-900">${label}${analysis.sortKey === key ? (analysis.sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</button></th>`;
+    if (!items.length) return '<p class="text-sm text-slate-500 py-4">Niciun activ nu corespunde căutării.</p>';
+    const total = sum(items.map((i) => i.value));
+    return `<div class="overflow-x-auto -mx-1"><table class="matrix w-full text-sm">
+      <thead><tr>${th('label', 'Activ', 'text-left')}${th('cat', 'Categorie', 'text-left')}${th('institution', 'Instituție', 'text-left hidden md:table-cell')}<th class="text-left hidden sm:table-cell">Deținători</th>${th('value', analysisMembers().length ? 'Partea selecției' : 'Valoare')}</tr></thead>
+      <tbody>${items.map((i) => `<tr>
+        <td class="text-left"><span class="font-medium">${esc(i.label)}</span>${i.currency !== baseCur() ? `<div class="text-xs text-slate-500">${esc(i.currency)}</div>` : ''}</td>
+        <td class="text-left whitespace-nowrap"><span class="inline-flex items-center gap-1.5"><span class="w-2 h-2 rounded-sm" style="background:${Calc.CATEGORIES[i.cat].color}"></span>${Calc.CATEGORIES[i.cat].label}</span></td>
+        <td class="text-left hidden md:table-cell">${esc(i.institution)}</td>
+        <td class="text-left hidden sm:table-cell text-slate-600">${esc(i.holders.join(', '))}</td>
+        <td class="font-semibold whitespace-nowrap">${dmoney(i.value)}${Math.abs(i.value - i.assetValue) > 0.5 ? `<div class="text-xs text-slate-500 font-normal">din ${dmoney(i.assetValue)}</div>` : ''}</td></tr>`).join('')}</tbody>
+      <tfoot><tr><td class="text-left" colspan="2">${items.length} active</td><td class="hidden md:table-cell"></td><td class="hidden sm:table-cell"></td><td>${dmoney(total)}</td></tr></tfoot>
+    </table></div>`;
+  }
+
+  function renderAnalysis() {
+    const admin = isAdmin();
+    const groups = GROUPS.filter((g) => admin || !g.admin);
+    if (!groups.some((g) => g.id === analysis.group)) analysis.group = admin ? 'member' : 'category';
+    const rows = analysisRows();
+    const total = sum(rows.map((r) => r.value));
+    const family = Calc.netWorth(D()).total;
+    const assetCount = new Set(rows.map((r) => r.assetId)).size;
+    const mems = analysisMembers();
+    const hasUnalloc = Calc.shareRows(D()).some((r) => r.member_id === Calc.UNALLOCATED);
+    const filtered = admin && (analysis.members.length || analysis.cats.length);
+
+    const selLabel = !admin ? `Partea ta (${esc(currentMember().name)})`
+      : !mems.length ? 'Toată familia'
+      : mems.map((id) => (id === Calc.UNALLOCATED ? 'Nealocat' : esc(memberName(id)))).join(' + ');
+    const catLabel = analysis.cats.length ? ' · ' + analysis.cats.map((c) => Calc.CATEGORIES[c].label).join(', ') : '';
+
+    let body;
+    if (analysis.group === 'matrix') body = matrixHtml(rows);
+    else if (analysis.group === 'list') body = `<input id="analysis-search" type="search" value="${esc(analysis.search)}" placeholder="Caută activ, instituție sau membru…" class="input mb-3" aria-label="Caută">
+      <div id="analysis-list">${listTableHtml(rows)}</div>
+      <div class="flex justify-end mt-3"><button data-action="exportCsv" class="btn-secondary btn-sm">⬇ Exportă CSV</button></div>`;
+    else {
+      const g = groupBy(rows, analysis.group);
+      body = `${compositionBar(g, total, analysis.group)}<div class="mt-5">${barList(g, total, analysis.group)}</div>`;
+    }
+
+    return `${sectionHeader(admin ? 'Analiză avere' : 'Analiza averii tale', admin ? 'Filtrează pe membri și categorii și alege cum să grupezi valorile' : 'Filtrează pe categorii și alege cum să grupezi valorile')}
+      <section class="card mb-4 space-y-3 no-print">
+        ${admin ? `<div class="flex flex-wrap items-center gap-2"><span class="filter-label">Membri</span>
+          ${chip('allMembers', '', 'Toți', !analysis.members.length)}
+          ${D().family_members.map((m) => chip('toggleMember', m.id, m.name, analysis.members.includes(m.id), memberColor(m.id))).join('')}
+          ${hasUnalloc ? chip('toggleMember', Calc.UNALLOCATED, 'Nealocat', analysis.members.includes(Calc.UNALLOCATED), Calc.OTHER_COLOR) : ''}</div>` : ''}
+        <div class="flex flex-wrap items-center gap-2"><span class="filter-label">Categorii</span>
+          ${chip('allCats', '', 'Toate', !analysis.cats.length)}
+          ${Object.keys(Calc.CATEGORIES).map((c) => chip('toggleCat', c, Calc.CATEGORIES[c].label, analysis.cats.includes(c), Calc.CATEGORIES[c].color)).join('')}</div>
+        <div class="flex flex-wrap items-center gap-2"><span class="filter-label">Monedă</span>
+          <select id="analysis-currency" class="input w-auto py-1.5" aria-label="Moneda de afișare">${currencies().filter((c) => Calc.rateKnown(c, M())).map((c) => `<option ${c === dispCur() ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
+          ${filtered ? '<button data-action="resetAnalysis" class="btn-ghost btn-sm ml-auto">✕ Resetează filtrele</button>' : ''}</div>
+      </section>
+
+      <section class="grid gap-4 sm:grid-cols-3 mb-4">
+        <div class="card sm:col-span-2 bg-gradient-to-br from-teal-700 to-teal-900 text-white border-0">
+          <p class="text-teal-100 text-sm">${selLabel}${catLabel}</p>
+          <p class="text-4xl font-bold mt-1 tabular-nums">${dmoney(total)}</p>
+          ${dispCur() !== baseCur() ? `<p class="text-teal-100 text-sm mt-1 tabular-nums">≈ ${money(total)}</p>` : ''}
+        </div>
+        <div class="card grid grid-cols-2 sm:grid-cols-1 gap-3">
+          <div><p class="text-xs text-slate-500">Din averea familiei</p><p class="text-2xl font-bold tabular-nums">${pctTxt(total, family)}</p></div>
+          <div><p class="text-xs text-slate-500">Active incluse</p><p class="text-2xl font-bold tabular-nums">${assetCount}</p></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="flex gap-1 overflow-x-auto no-scrollbar border-b border-slate-100 -mx-5 px-4 mb-5" role="tablist">
+          ${groups.map((g) => `<button data-action="setGroup" data-value="${g.id}" role="tab" aria-selected="${analysis.group === g.id}" class="tab ${analysis.group === g.id ? 'tab-active' : ''}">${g.label}</button>`).join('')}
+        </div>
+        ${body}
+      </section>`;
+  }
+
+  function exportCsv() {
+    const items = listItems(analysisRows());
+    const q = (s) => `"${String(s).replace(/"/g, '""')}"`;
+    const lines = [['Activ', 'Categorie', 'Instituție', 'Moneda originală', 'Deținători', `Valoare (${dispCur()})`].map(q).join(';')]
+      .concat(items.map((i) => [i.label, Calc.CATEGORIES[i.cat].label, i.institution, i.currency, i.holders.join(', '), conv(i.value).toFixed(2).replace('.', ',')].map(q).join(';')));
+    const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `avere_${Calc.todayISO()}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  function toggleIn(arr, v) { const i = arr.indexOf(v); if (i >= 0) arr.splice(i, 1); else arr.push(v); }
+  function updateAnalysis(fn) { fn(); saveAnalysis(); render(); }
 
   /* ---------- Investiții ---------- */
   function renderInvestments() {
@@ -999,7 +1243,7 @@
     const kids = D().family_members.filter((m) => m.role === 'viewer_restricted');
     return sectionHeader('Economii Copii & Cont Centenar', 'Prag anual de 1.200 RON pentru prima de stat de 600 RON/an', 'children_savings') +
       (list.length ? `<div class="grid gap-4 lg:grid-cols-2">${list.map((a) => childAccountCard(a)).join('')}</div>` : emptyState('Niciun cont de economii pentru copii.', 'children_savings')) +
-      (kids.length ? `<div class="card mt-4 flex flex-wrap items-center gap-3 no-print"><span class="text-2xl">🧒</span><div class="flex-1 min-w-[12rem]"><p class="font-medium">Modul Copil</p><p class="text-sm text-slate-500">Copilul vede doar propria pușculiță, fără parolă. ${settings.adminPinHash ? 'Revenirea la profilul de părinte cere PIN.' : 'Setează un PIN în Setări ca să protejezi profilul de părinte.'}</p></div>
+      (kids.length ? `<div class="card mt-4 flex flex-wrap items-center gap-3 no-print"><span class="text-2xl">🧒</span><div class="flex-1 min-w-[12rem]"><p class="font-medium">Modul Copil</p><p class="text-sm text-slate-500">Copilul vede doar propria pușculiță. ${currentMember().auth ? 'Revenirea la profilul tău cere parola.' : 'Setează-ți o parolă (🔑 sus) ca să nu poată trece copilul în profilul tău.'}</p></div>
         ${kids.map((k) => `<button data-action="selectProfile" data-id="${esc(k.id)}" class="btn-secondary">${avatar(k, 'w-6 h-6 text-xs')} ${esc(k.name)}</button>`).join('')}</div>` : '');
   }
 
@@ -1091,7 +1335,9 @@
       `<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">${D().family_members.map((m) => `<article class="card flex items-center gap-3">
         ${avatar(m)}
         <div class="flex-1 min-w-0"><p class="font-semibold truncate">${esc(m.name)}${m.id === state.profileId ? ' <span class="badge bg-teal-100 text-teal-800">tu</span>' : ''}</p>
-        <p class="text-xs text-slate-500">${ROLE_LABELS[m.role] || esc(m.role)} · ${money(nw.byMember[m.id] || 0)}</p></div>
+        <p class="text-xs text-slate-500">${ROLE_LABELS[m.role] || esc(m.role)} · ${money(nw.byMember[m.id] || 0)}</p>
+        <p class="text-xs mt-0.5 ${m.auth ? 'text-emerald-700' : 'text-slate-400'}">${m.auth ? '🔒 Protejat cu parolă' : 'Fără parolă'}</p></div>
+        <button data-action="memberPassword" data-id="${esc(m.id)}" class="btn-ghost btn-sm" title="Parolă" aria-label="Parolă pentru ${esc(m.name)}">🔑</button>
         ${cardActions('family_members', m.id)}</article>`).join('')}</div>
       <div class="card mt-4 text-sm text-slate-600 space-y-1">${Object.keys(ROLE_LABELS).map((r) => `<p><strong>${ROLE_LABELS[r]}:</strong> ${ROLE_HINTS[r]}</p>`).join('')}</div>`;
   }
@@ -1148,13 +1394,11 @@
       </section>
 
       <section class="card">
-        <h3 class="font-semibold">🔒 PIN administrator</h3>
-        <p class="text-sm text-slate-500 mt-1">Împiedică trecerea din Modul Copil / Vizualizare în profilul de părinte pe acest dispozitiv. Blochează doar interfața, nu criptează datele.</p>
-        <form data-form="pin" class="mt-3 flex gap-2">
-          <input name="pin" type="password" inputmode="numeric" minlength="4" maxlength="12" placeholder="${settings.adminPinHash ? 'PIN nou' : 'Minim 4 cifre'}" class="input flex-1" autocomplete="new-password">
-          <button class="btn-primary">${settings.adminPinHash ? 'Schimbă' : 'Setează'}</button>
-        </form>
-        ${settings.adminPinHash ? '<button data-action="removePin" class="btn-ghost btn-sm text-rose-600 mt-2">Elimină PIN-ul</button>' : ''}
+        <h3 class="font-semibold">🔒 Parole pe profil</h3>
+        <p class="text-sm text-slate-500 mt-1">Fiecare membru poate avea propria parolă, cerută la alegerea profilului. Parolele se sincronizează în Drive, deci sunt aceleași pe toate dispozitivele.</p>
+        <p class="text-sm mt-2">${D().family_members.filter((m) => m.auth).length} din ${D().family_members.length} profiluri au parolă.</p>
+        <p class="text-xs text-slate-400 mt-2">Parola blochează interfața; datele de pe dispozitiv nu sunt criptate.</p>
+        <button data-action="nav" data-view="members" class="btn-secondary btn-sm mt-3">Gestionează parolele →</button>
       </section>
 
       <section class="card">
@@ -1184,7 +1428,7 @@
      RENDER
      ====================================================================== */
   const VIEWS = {
-    dashboard: renderDashboard, myassets: renderMyAssets,
+    dashboard: renderDashboard, myassets: renderMyAssets, analysis: renderAnalysis,
     investments: renderInvestments, grandparents: renderGrandparents, realestate: renderRealEstate,
     children: renderChildren, vehicles: renderVehicles, guide: renderGuide, members: renderMembers, settings: renderSettings
   };
@@ -1208,7 +1452,7 @@
     state.profileId = id;
     try { id ? localStorage.setItem(LS.PROFILE, id) : localStorage.removeItem(LS.PROFILE); } catch (e) { /* ignore */ }
     const m = member(id);
-    ssSet(SS_UNLOCK, m && m.role === 'admin' ? '1' : null);
+    ssSet(SS_UNLOCK, m ? id : null);
     state.view = 'dashboard';
     window.scrollTo(0, 0);
     render();
@@ -1218,20 +1462,82 @@
   function selectProfile(id) {
     const m = member(id);
     if (!m) return;
-    if (m.role === 'admin' && settings.adminPinHash && !(isAdmin())) {
+    // Un admin deja autentificat poate deschide direct alt profil care NU e admin (ex. Modul Copil pentru demonstrație).
+    const adminBypass = isAdmin() && m.role !== 'admin';
+    if (m.auth && !adminBypass) {
       openModal({
-        title: `PIN pentru ${m.name}`,
-        body: `<input name="pin" type="password" inputmode="numeric" autocomplete="current-password" class="input text-center text-2xl tracking-[0.5em]" aria-label="PIN">`,
-        submitLabel: 'Deblochează',
+        title: `Parola pentru ${m.name}`,
+        body: `<div class="flex flex-col items-center gap-3">${avatar(m, 'w-14 h-14 text-xl')}
+          <input type="text" name="username" value="${esc(m.name)}" autocomplete="username" class="hidden" tabindex="-1" aria-hidden="true">
+          <input name="password" type="password" autocomplete="current-password" class="input text-center text-lg" aria-label="Parola" required></div>`,
+        submitLabel: 'Intră',
         onSubmit: async (form) => {
-          const ok = (await hashPin(form.pin.value)) === settings.adminPinHash;
-          if (!ok) { showFormErrors(['PIN incorect.']); form.pin.value = ''; form.pin.focus(); return false; }
+          const btn = form.querySelector('[type=submit]');
+          btn.disabled = true;
+          const ok = await checkAuth(form.password.value, m.auth);
+          if (!ok) {
+            failedAttempts++;
+            await new Promise((r) => setTimeout(r, Math.min(5000, 400 * failedAttempts))); // încetinește încercările repetate
+            btn.disabled = false;
+            showFormErrors([cryptoOk() ? 'Parolă incorectă.' : 'Browserul nu suportă verificarea parolei (este nevoie de HTTPS).']);
+            form.password.value = ''; form.password.focus();
+            return false;
+          }
+          failedAttempts = 0;
           closeModal(); setProfile(id); return true;
         }
       });
       return;
     }
     setProfile(id);
+  }
+
+  /** Setează / schimbă / elimină parola unui membru.
+      Adminul poate reseta parola oricui fără parola veche; pentru propriul profil se cere parola curentă. */
+  function passwordForm(memberId) {
+    const m = member(memberId);
+    if (!m) return;
+    const self = memberId === state.profileId;
+    if (!self && !isAdmin()) return;
+    if (!cryptoOk()) { toast('Parolele necesită o conexiune securizată (HTTPS sau localhost).', 'error'); return; }
+    const needCurrent = self && !!m.auth;
+    openModal({
+      title: `${m.auth ? 'Schimbă parola' : 'Setează parolă'} — ${m.name}`,
+      body: `<div class="grid gap-3">
+        <input type="text" name="username" value="${esc(m.name)}" autocomplete="username" class="hidden" tabindex="-1" aria-hidden="true">
+        ${needCurrent ? `<label class="field"><span class="field-label">Parola curentă *</span><input name="current" type="password" autocomplete="current-password" class="input" required></label>` : ''}
+        <label class="field"><span class="field-label">Parolă nouă *</span><input name="pw1" type="password" autocomplete="new-password" minlength="${MIN_PASSWORD}" class="input" required><span class="field-hint">Minim ${MIN_PASSWORD} caractere. Poate fi și un PIN numeric.</span></label>
+        <label class="field"><span class="field-label">Confirmă parola *</span><input name="pw2" type="password" autocomplete="new-password" class="input" required></label>
+        ${!self && m.auth ? '<p class="text-xs text-slate-500">Ca administrator, poți reseta parola fără s-o știi pe cea veche.</p>' : ''}
+        ${m.auth ? `<button type="button" data-action="removePassword" data-id="${esc(m.id)}" class="btn-ghost btn-sm text-rose-600 justify-self-start">Elimină parola</button>` : ''}
+      </div>`,
+      onSubmit: async (form) => {
+        const errors = [];
+        if (needCurrent && !(await checkAuth(form.current.value, m.auth))) errors.push('Parola curentă este incorectă.');
+        if (form.pw1.value.length < MIN_PASSWORD) errors.push(`Parola trebuie să aibă minim ${MIN_PASSWORD} caractere.`);
+        if (form.pw1.value !== form.pw2.value) errors.push('Parolele nu coincid.');
+        if (errors.length) { showFormErrors(errors); return false; }
+        const auth = await makeAuth(form.pw1.value);
+        commit((d) => { const t = d.family_members.find((x) => x.id === memberId); if (t) t.auth = auth; }, `Parola pentru ${m.name} a fost salvată.`);
+        if (self) ssSet(SS_UNLOCK, memberId);
+        return true;
+      }
+    });
+  }
+
+  async function removePassword(memberId) {
+    const m = member(memberId);
+    if (!m || !m.auth) return;
+    const self = memberId === state.profileId;
+    if (!self && !isAdmin()) return;
+    if (self) {
+      const form = $('[data-modal-form]');
+      const cur = form && form.current ? form.current.value : '';
+      if (!(await checkAuth(cur, m.auth))) { showFormErrors(['Introdu parola curentă ca să o elimini.']); return; }
+    }
+    closeModal();
+    if (!(await confirmDialog('Elimină parola', `Profilul „${m.name}” va putea fi deschis fără parolă pe orice dispozitiv.`, 'Elimină'))) return;
+    commit((d) => { const t = d.family_members.find((x) => x.id === memberId); if (t) delete t.auth; }, 'Parola a fost eliminată.');
   }
 
   /* ======================================================================
@@ -1335,7 +1641,23 @@
       if (used) { toast(`${ds.cur} este folosit de unele active.`, 'error'); return; }
       commit((d) => { delete d.metadata.exchange_rates[ds.cur]; }, `${ds.cur} eliminat.`);
     },
-    removePin: () => { settings.adminPinHash = null; saveSettings(); render(); toast('PIN eliminat.', 'info'); },
+    toggleMember: (ds) => updateAnalysis(() => toggleIn(analysis.members, ds.value)),
+    allMembers: () => updateAnalysis(() => { analysis.members = []; }),
+    toggleCat: (ds) => updateAnalysis(() => toggleIn(analysis.cats, ds.value)),
+    allCats: () => updateAnalysis(() => { analysis.cats = []; }),
+    setGroup: (ds) => updateAnalysis(() => { analysis.group = ds.value; }),
+    resetAnalysis: () => updateAnalysis(() => { analysis.members = []; analysis.cats = []; }),
+    drillMember: (ds) => updateAnalysis(() => { analysis.members = [ds.value]; analysis.group = 'category'; }),
+    drillCategory: (ds) => updateAnalysis(() => { analysis.cats = [ds.value]; analysis.group = isAdmin() ? 'member' : 'list'; }),
+    analyzeMember: (ds) => { analysis.members = [ds.value]; analysis.cats = []; analysis.group = 'category'; saveAnalysis(); state.view = 'analysis'; window.scrollTo(0, 0); render(); },
+    sortList: (ds) => updateAnalysis(() => {
+      if (analysis.sortKey === ds.value) analysis.sortDir = analysis.sortDir === 'asc' ? 'desc' : 'asc';
+      else { analysis.sortKey = ds.value; analysis.sortDir = ds.value === 'value' ? 'desc' : 'asc'; }
+    }),
+    exportCsv,
+    ownPassword: () => passwordForm(state.profileId),
+    memberPassword: (ds) => passwordForm(ds.id),
+    removePassword: (ds) => removePassword(ds.id),
     addContact: () => contactForm(null),
     editContact: (ds) => contactForm(+ds.index),
     deleteContact: async (ds) => {
@@ -1373,12 +1695,6 @@
       }
       if (errors.length) { toast(errors.join(' '), 'error', 5000); return; }
       commit((d) => { d.metadata.exchange_rates = rates; }, 'Cursuri actualizate.');
-    },
-    pin: async (form) => {
-      const pin = form.pin.value.trim();
-      if (!/^\d{4,12}$/.test(pin)) { toast('PIN-ul trebuie să conțină 4–12 cifre.', 'error'); return; }
-      settings.adminPinHash = await hashPin(pin); saveSettings();
-      render(); toast('PIN setat.', 'success');
     }
   };
 
@@ -1405,9 +1721,13 @@
     if (h) { e.preventDefault(); h(form); }
   });
 
-  document.addEventListener('input', (e) => { if (e.target.closest('#split-rows')) updateSplitTotal(); });
+  document.addEventListener('input', (e) => {
+    if (e.target.closest('#split-rows')) updateSplitTotal();
+    if (e.target.id === 'analysis-search') { analysis.search = e.target.value; const box = $('#analysis-list'); if (box) box.innerHTML = listTableHtml(analysisRows()); }
+  });
   document.addEventListener('change', (e) => {
     if (e.target.closest('#split-rows')) updateSplitTotal();
+    if (e.target.id === 'analysis-currency') updateAnalysis(() => { analysis.currency = e.target.value; });
     if (e.target.id === 'import-file') {
       const file = e.target.files[0];
       e.target.value = '';
@@ -1424,6 +1744,26 @@
   });
 
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.modal) actions.closeModal(); });
+
+  /* Tooltip la hover pentru orice element cu data-tip (bare, segmente, celule) */
+  const tip = document.createElement('div');
+  tip.className = 'viz-tip';
+  tip.setAttribute('role', 'tooltip');
+  document.body.appendChild(tip);
+  const hideTip = () => { tip.style.opacity = '0'; };
+  document.addEventListener('pointermove', (e) => {
+    const t = e.target.closest && e.target.closest('[data-tip]');
+    if (!t) { hideTip(); return; }
+    tip.textContent = t.dataset.tip;
+    tip.style.opacity = '1';
+    const r = tip.getBoundingClientRect();
+    let x = e.clientX + 14, y = e.clientY + 14;
+    if (x + r.width > window.innerWidth - 8) x = e.clientX - r.width - 14;
+    if (y + r.height > window.innerHeight - 8) y = e.clientY - r.height - 14;
+    tip.style.transform = `translate(${Math.max(8, x)}px, ${Math.max(8, y)}px)`;
+  });
+  document.addEventListener('scroll', hideTip, { passive: true });
+  document.addEventListener('pointerdown', (e) => { if (!(e.target.closest && e.target.closest('[data-tip]'))) hideTip(); });
 
   window.addEventListener('online', () => { if (settings.driveConnected) { if (pendingPush) pushNow(); else setSync(DriveSync.hasValidToken() ? 'synced' : 'auth'); } });
   window.addEventListener('offline', () => { if (settings.driveConnected) setSync('offline'); });
@@ -1445,8 +1785,8 @@
     let pid = null;
     try { pid = localStorage.getItem(LS.PROFILE); } catch (e) { /* ignore */ }
     const m = pid && member(pid);
-    // Profil admin protejat de PIN: cere PIN din nou la o sesiune nouă de browser
-    state.profileId = m && !(m.role === 'admin' && settings.adminPinHash && ssGet(SS_UNLOCK) !== '1') ? pid : null;
+    // Profil cu parolă: o cere din nou la o sesiune nouă de browser
+    state.profileId = m && (!m.auth || ssGet(SS_UNLOCK) === pid) ? pid : null;
 
     if (settings.driveConnected) setSync(navigator.onLine ? 'auth' : 'offline', 'Atinge pentru a sincroniza cu Google Drive');
     if (clientId() && navigator.onLine) DriveSync.preload();
