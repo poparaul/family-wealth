@@ -221,6 +221,11 @@
   const memberColor = (id) => { const i = D().family_members.findIndex((m) => m.id === id); return i < 0 || i >= MEMBER_COLORS.length ? Calc.OTHER_COLOR : MEMBER_COLORS[i]; };
   const currentMember = () => (state.profileId ? member(state.profileId) : null);
   const isAdmin = () => { const m = currentMember(); return !!m && m.role === 'admin'; };
+  // Comutator pentru administratori: afișează doar activele (și partea) profilului curent. Per dispozitiv.
+  const mineOnly = () => isAdmin() && !!settings.mineOnly;
+  // Deținătorii unui cont: împărțirea dacă există, altfel titularul (ex. depozit pe contul lui Raul, banii Sorinei).
+  const holdersOf = (a) => (a.splits && a.splits.length ? a.splits : a.owner_id ? [{ member_id: a.owner_id, percentage: 100 }] : []);
+  const myPct = (a) => { const h = holdersOf(a).find((x) => x.member_id === state.profileId); return h ? Calc.num(h.percentage) : 0; };
 
   function normalizeData(data) {
     const d = data && typeof data === 'object' ? data : emptyData();
@@ -634,7 +639,7 @@
     },
     grandparents_accounts: {
       singular: 'cont bancar', prefix: 'bank', splits: true,
-      defaults: () => ({ bank_name: '', account_type: '', owner_id: firstByRole('viewer'), iban_or_account: '', principal_amount: 0, interest_rate: 0, start_date: null, maturity_date: null, tax_rate: 10, maturity_value: null, currency: 'RON', splits: [] }),
+      defaults: () => ({ bank_name: '', account_type: '', owner_id: firstByRole('viewer'), iban_or_account: '', principal_amount: 0, interest_rate: 0, start_date: null, maturity_date: null, tax_rate: 10, maturity_value: null, currency: 'RON', notes: '', splits: [] }),
       fields: [
         { k: 'bank_name', label: 'Bancă / Instituție', type: 'text', req: true, list: 'dl-platforms' },
         { k: 'account_type', label: 'Tip cont', type: 'text', list: 'dl-bank-types', placeholder: 'Alege din listă sau scrie' },
@@ -647,7 +652,8 @@
         { k: 'maturity_date', label: 'Data scadenței', type: 'date' },
         { k: 'tax_rate', label: 'Impozit pe dobândă (%)', type: 'number', min: 0, max: 100, hint: 'Implicit 10% (reținut de bancă)' },
         { k: 'maturity_value', label: 'Valoare la scadență (din contract)', type: 'number', min: 0, hint: 'Opțional — gol = calcul automat' },
-        { type: 'preview', id: 'deposit-preview' }
+        { type: 'preview', id: 'deposit-preview' },
+        { k: 'notes', label: 'Note', type: 'textarea', wide: true }
       ]
     },
     real_estate: {
@@ -1037,6 +1043,7 @@
           <h1 class="font-semibold leading-tight truncate">Patrimoniu Familial</h1>
           <p class="text-xs text-slate-500 truncate">${esc(me.name)} · ${ROLE_LABELS[me.role]}</p>
         </div>
+        ${isAdmin() ? `<button data-action="toggleMine" class="mine-toggle ${mineOnly() ? 'mine-on' : ''}" aria-pressed="${mineOnly()}" title="${mineOnly() ? 'Arată toată familia' : 'Arată doar activele mele'}">👤<span class="hidden sm:inline">Doar ale mele</span></button>` : ''}
         <div id="sync-badge">${syncBadgeHtml()}</div>
         ${FWVault.enabled() ? '<button data-action="lockNow" class="btn-ghost btn-sm" title="Blochează (cere parola familiei)" aria-label="Blochează">🔒</button>' : ''}
         <button data-action="ownPassword" class="btn-ghost btn-sm" title="${me.auth ? 'Schimbă parola' : 'Setează o parolă'}" aria-label="Parola mea">🔑</button>
@@ -1046,11 +1053,15 @@
         ${nav.map((n) => `<button data-action="nav" data-view="${n.id}" class="tab ${state.view === n.id ? 'tab-active' : ''}" ${state.view === n.id ? 'aria-current="page"' : ''}><span aria-hidden="true">${n.icon}</span> ${n.label}</button>`).join('')}
       </nav>
     </header>
-    <main class="max-w-6xl mx-auto px-4 py-6 pb-24">${content}</main>`;
+    <main class="max-w-6xl mx-auto px-4 py-6 pb-24">
+      ${mineOnly() ? `<div class="mine-banner no-print">👤 Afișezi doar activele tale (<strong>${esc(me.name)}</strong>) și partea ta din cele comune.
+        <button data-action="toggleMine" class="underline font-medium">Arată toată familia</button></div>` : ''}
+      ${content}</main>`;
   }
 
   /* ---------- Dashboard ---------- */
   function alertsHtml(adminView) {
+    if (adminView && mineOnly()) adminView = false;
     const today = new Date();
     const me = currentMember();
     let vAlerts = Calc.vehicleAlerts(D(), today);
@@ -1059,7 +1070,7 @@
     if (!adminView) {
       vAlerts = vAlerts.filter((a) => a.vehicle.owner_id === me.id);
       reminders = [];
-      maturities = maturities.filter((m) => m.account.owner_id === me.id || (m.account.splits || []).some((s) => s.member_id === me.id));
+      maturities = maturities.filter((m) => holdersOf(m.account).some((s) => s.member_id === me.id));
     }
     if (!vAlerts.length && !reminders.length && !maturities.length) {
       return `<div class="card flex items-center gap-3"><span class="text-2xl">✅</span><div><p class="font-medium">Totul este în regulă</p><p class="text-sm text-slate-500">Nicio expirare sau cotizație restantă.</p></div></div>`;
@@ -1085,7 +1096,9 @@
 
   function renderDashboard() {
     if (!isAdmin()) return renderViewerDashboard();
-    const nw = Calc.netWorth(D());
+    const mine = mineOnly();
+    const me = currentMember();
+    const nw = mine ? myWorth(me.id) : Calc.netWorth(D());
     const cats = Object.keys(Calc.CATEGORIES).filter((c) => nw.byCat[c] > 0);
     const members = D().family_members.map((m) => ({ m, v: nw.byMember[m.id] || 0 })).sort((a, b) => b.v - a.v);
     const maxV = Math.max(1, ...members.map((x) => x.v));
@@ -1095,7 +1108,7 @@
       ${sectionHeader('Panou principal', `Actualizat: ${new Date(M().last_updated).getFullYear() > 2000 ? new Date(M().last_updated).toLocaleString('ro-RO') : '—'}`, null, currencySwitch())}
       <div class="grid gap-4 lg:grid-cols-3">
         <section class="card lg:col-span-2 bg-gradient-to-br from-teal-700 to-teal-900 text-white border-0">
-          <p class="text-teal-100 text-sm">Avere netă totală a familiei</p>
+          <p class="text-teal-100 text-sm">${mine ? `Averea ta (${esc(me.name)})` : 'Avere netă totală a familiei'}</p>
           <p class="text-4xl sm:text-5xl font-bold mt-1 tabular-nums">${money(nw.total)}</p>
           ${dispCur() !== baseCur() ? `<p class="text-teal-100 text-sm tabular-nums">≈ ${Calc.formatMoney(nw.total, baseCur())}</p>` : ''}
           <p class="text-teal-100 text-sm mt-1">${nw.assets.length} active · EUR ${M().exchange_rates.EUR || '—'} · USD ${M().exchange_rates.USD || '—'}</p>
@@ -1109,8 +1122,8 @@
           ${alertsHtml(true)}
         </section>
       </div>
-      ${dashboardPieCard(nw)}
-      <section class="card mt-4">
+      ${dashboardPieCard(nw, mine)}
+      ${mine ? '' : `<section class="card mt-4">
         <div class="flex items-center justify-between gap-3 mb-4"><h3 class="font-semibold">Defalcare pe membri (Account Splitting)</h3>
           <button data-action="nav" data-view="analysis" class="btn-ghost btn-sm">🔎 Analiză detaliată →</button></div>
         <ul class="space-y-4">${members.map(({ m, v }) => `<li>
@@ -1119,22 +1132,31 @@
             <div class="mt-1.5">${progressBar((v / maxV) * 100, memberColor(m.id), 'h-2')}</div>
             <p class="text-xs text-slate-500 mt-1">${nw.total ? ((v / nw.total) * 100).toFixed(1) : 0}% din total · ${Calc.memberAssets(D(), m.id).length} active</p></div>
           </div></li>`).join('')}</ul>
-      </section>
+      </section>`}
       <section class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5 mt-4">
         ${Object.keys(Calc.CATEGORIES).map((c) => {
           const view = { investment_accounts: 'investments', grandparents_accounts: 'grandparents', real_estate: 'realestate', children_savings: 'children', vehicles: 'vehicles' }[c];
           return `<button data-action="nav" data-view="${view}" class="card card-hover text-left">
             <span class="text-xs font-medium" style="color:${Calc.CATEGORIES[c].color}">${Calc.CATEGORIES[c].label}</span>
             <p class="text-xl font-bold mt-1 tabular-nums">${money(nw.byCat[c] || 0)}</p>
-            <p class="text-xs text-slate-500">${D()[c].length} înregistrări</p></button>`;
+            <p class="text-xs text-slate-500">${mine ? nw.assets.filter((a) => a.cat === c).length : D()[c].length} înregistrări</p></button>`;
         }).join('')}
       </section>`;
   }
 
-  function dashboardPieCard(nw) {
+  // Totalurile doar pentru partea unui membru (aceeași formă ca Calc.netWorth).
+  function myWorth(id) {
+    const rows = Calc.shareRows(D()).filter((r) => r.member_id === id);
+    const byCat = {};
+    rows.forEach((r) => { byCat[r.cat] = (byCat[r.cat] || 0) + r.value; });
+    const total = sum(rows.map((r) => r.value));
+    return { total, byCat, byMember: { [id]: total }, unallocated: 0, assets: Calc.memberAssets(D(), id) };
+  }
+
+  function dashboardPieCard(nw, mine = false) {
     if (!(nw.total > 0)) return '';
     const ps = pieSettings();
-    const dim = ps.dashDim === 'member' ? 'member' : 'category';
+    const dim = !mine && ps.dashDim === 'member' ? 'member' : 'category';
     let groups;
     if (dim === 'category') groups = Object.keys(nw.byCat).map((k) => ({ key: k, value: nw.byCat[k] }));
     else {
@@ -1147,12 +1169,12 @@
       <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
         <h3 class="font-semibold">Distribuția averii</h3>
         <div class="flex flex-wrap gap-2 no-print">
-          <div class="cur-switch" role="group" aria-label="Grupare">${dimBtn('category', 'Categorii')}${dimBtn('member', 'Membri')}</div>
+          ${mine ? '' : `<div class="cur-switch" role="group" aria-label="Grupare">${dimBtn('category', 'Categorii')}${dimBtn('member', 'Membri')}</div>`}
           ${pieSortSwitch('dash', ps.dashSort)}
         </div>
       </div>
       <div class="grid gap-6 sm:grid-cols-[12rem_1fr] items-center">
-        <div class="mx-auto w-48 max-w-full">${donutSvg(slices, nw.total, 'Total familie')}</div>
+        <div class="mx-auto w-48 max-w-full">${donutSvg(slices, nw.total, mine ? 'Partea ta' : 'Total familie')}</div>
         ${pieLegend(slices, nw.total)}
       </div>
     </section>`;
@@ -1225,7 +1247,7 @@
   const analysisBaseRows = () => Calc.shareRows(D()).filter((r) => ANALYSIS_CATS.includes(r.cat));
 
   function analysisMembers() {
-    if (!isAdmin()) return [state.profileId];
+    if (!isAdmin() || mineOnly()) return [state.profileId];
     return analysis.members.filter((id) => id === Calc.UNALLOCATED || member(id));
   }
 
@@ -1424,7 +1446,7 @@
   }
 
   function renderAnalysis() {
-    const admin = isAdmin();
+    const admin = isAdmin() && !mineOnly(); // în modul „ale mele”, analiza arată ca pentru un singur membru
     const groups = GROUPS.filter((g) => admin || !g.admin);
     if (!groups.some((g) => g.id === analysis.group)) analysis.group = admin ? 'member' : 'category';
     const rows = analysisRows();
@@ -1505,16 +1527,25 @@
   function toggleIn(arr, v) { const i = arr.indexOf(v); if (i >= 0) arr.splice(i, 1); else arr.push(v); }
   function updateAnalysis(fn) { fn(); saveAnalysis(); render(); }
 
+  // În modul „ale mele”, pe conturile comune: cât îți revine.
+  function myShareLine(a, base) {
+    if (!mineOnly()) return '';
+    const pct = myPct(a);
+    return pct > 0 && pct < 99.99 ? `<p class="text-sm mt-1"><span class="badge bg-teal-50 text-teal-800">Partea ta ${Math.round(pct * 100) / 100}%: ${money(base * pct / 100)}</span></p>` : '';
+  }
+
   /* ---------- Investiții ---------- */
   function renderInvestments() {
-    const list = D().investment_accounts;
-    const total = sum(list.map((a) => Calc.toBase(a.total_value, a.currency, M())));
-    return sectionHeader('Investiții & Brokeraj', `Total: <strong>${money(total)}</strong> · ${list.length} conturi`, 'investment_accounts') +
+    const mine = mineOnly();
+    const list = D().investment_accounts.filter((a) => !mine || myPct(a) > 0);
+    const total = sum(list.map((a) => Calc.toBase(a.total_value, a.currency, M()) * (mine ? myPct(a) / 100 : 1)));
+    return sectionHeader('Investiții & Brokeraj', `${mine ? 'Partea ta' : 'Total'}: <strong>${money(total)}</strong> · ${list.length} conturi`, 'investment_accounts') +
       (list.length ? `<div class="grid gap-4 md:grid-cols-2">${list.map((a) => {
         const base = Calc.toBase(a.total_value, a.currency, M());
         return `<article class="card">
           <div class="flex items-start justify-between gap-3"><div class="min-w-0"><h3 class="font-semibold text-lg">${esc(a.platform)}</h3><p class="text-sm text-slate-500">${esc(a.account_type)}</p></div>${cardActions('investment_accounts', a.id)}</div>
           <div class="mt-3">${valueBlock(a.total_value, a.currency)}</div>
+          ${myShareLine(a, base)}
           ${Calc.isDeposit(a.account_type) && (Calc.num(a.interest_rate) > 0 || a.maturity_date) ? `<dl class="grid grid-cols-2 gap-2 mt-3 text-sm">
             <div class="stat"><dt>Dobândă</dt><dd>${Calc.num(a.interest_rate)}% / an</dd></div>
             <div class="stat"><dt>Scadență</dt><dd>${Calc.formatDate(a.maturity_date)}${Calc.daysUntil(a.maturity_date) != null ? ` <span class="badge bg-slate-100 text-slate-600">${Calc.daysUntil(a.maturity_date) < 0 ? 'scadent' : Calc.formatDays(Calc.daysUntil(a.maturity_date))}</span>` : ''}</dd></div>
@@ -1527,9 +1558,10 @@
 
   /* ---------- Bănci & depozite (colecția grandparents_accounts, nume istoric) ---------- */
   function renderGrandparents() {
-    const list = D().grandparents_accounts;
-    const total = sum(list.map((a) => Calc.toBase(a.principal_amount, a.currency, M())));
-    return sectionHeader('Bănci & Depozite', `Total: <strong>${money(total)}</strong> · ${list.length} conturi`, 'grandparents_accounts') +
+    const mine = mineOnly();
+    const list = D().grandparents_accounts.filter((a) => !mine || myPct(a) > 0);
+    const total = sum(list.map((a) => Calc.toBase(a.principal_amount, a.currency, M()) * (mine ? myPct(a) / 100 : 1)));
+    return sectionHeader('Bănci & Depozite', `${mine ? 'Partea ta' : 'Total'}: <strong>${money(total)}</strong> · ${list.length} conturi`, 'grandparents_accounts') +
       (list.length ? `<div class="grid gap-4 md:grid-cols-2">${list.map((a) => {
         const base = Calc.toBase(a.principal_amount, a.currency, M());
         const days = Calc.daysUntil(a.maturity_date);
@@ -1539,6 +1571,7 @@
           <div class="flex items-start justify-between gap-3"><div class="min-w-0"><h3 class="font-semibold text-lg">${esc(a.bank_name)}</h3><p class="text-sm text-slate-500">${esc(a.account_type)}</p></div>${cardActions('grandparents_accounts', a.id)}</div>
           <p class="text-sm mt-2 flex items-center gap-2">${member(a.owner_id) ? avatar(member(a.owner_id), 'w-5 h-5 text-[10px]') : ''} Titular: <strong>${esc(memberName(a.owner_id))}</strong></p>
           <div class="mt-3">${valueBlock(a.principal_amount, a.currency)}</div>
+          ${myShareLine(a, base)}
           <dl class="grid grid-cols-2 gap-2 mt-3 text-sm">
             <div class="stat"><dt>Dobândă</dt><dd>${Calc.num(a.interest_rate)}% / an</dd></div>
             <div class="stat"><dt>Dobândă anuală est.</dt><dd>${money(Calc.annualInterest(a), a.currency)}</dd></div>
@@ -1548,6 +1581,7 @@
           </dl>
           ${Calc.num(a.interest_rate) > 0 ? `<div class="mt-3">${depositSummaryHtml(a, a.currency)}</div>` : ''}
           ${splitsHtml(splits, base)}
+          ${a.notes ? `<p class="mt-3 text-sm text-slate-600 border-t border-slate-100 pt-3 whitespace-pre-line">${esc(a.notes)}</p>` : ''}
         </article>`;
       }).join('')}</div>` : emptyState('Niciun cont bancar adăugat.', 'grandparents_accounts'));
   }
@@ -2083,6 +2117,7 @@
       Calc.equalSplit(inputs.length).forEach((v, i) => { inputs[i].value = v; });
       updateSplitTotal();
     },
+    toggleMine: () => { settings.mineOnly = !settings.mineOnly; saveSettings(); render(); },
     setPieDim: (ds) => { settings.pie = Object.assign(pieSettings(), { dashDim: ds.value }); saveSettings(); render(); },
     setPieSort: (ds) => { settings.pie = Object.assign(pieSettings(), { [ds.chart === 'ana' ? 'anaSort' : 'dashSort']: ds.value }); saveSettings(); render(); },
     setDisplayCurrency: (ds) => { settings.displayCurrency = ds.value; saveSettings(); render(); },
