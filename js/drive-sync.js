@@ -7,9 +7,17 @@
   const API = 'https://www.googleapis.com/drive/v3';
   const UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
   const FILE_ID_KEY = 'fw_drive_file_id';
+  const TOKEN_KEY = 'fw_drive_token'; // access_token (doar drive.appdata, valabil ~1h) — supraviețuiește reîncărcării paginii
 
   let token = null;
   let expiresAt = 0;
+  try {
+    const t = JSON.parse(localStorage.getItem(TOKEN_KEY) || 'null');
+    if (t && t.token && Date.now() < t.expiresAt) { token = t.token; expiresAt = t.expiresAt; }
+  } catch (e) { /* ignore */ }
+  function saveToken() {
+    try { token ? localStorage.setItem(TOKEN_KEY, JSON.stringify({ token, expiresAt })) : localStorage.removeItem(TOKEN_KEY); } catch (e) { /* ignore */ }
+  }
   let gisPromise = null;
   let fileId = safeGet(FILE_ID_KEY);
   let queue = Promise.resolve(); // serializează operațiile Drive
@@ -54,6 +62,7 @@
           }
           token = resp.access_token;
           expiresAt = Date.now() + (Number(resp.expires_in || 3600) - 60) * 1000;
+          saveToken();
           resolve();
         },
         error_callback: (err) => {
@@ -74,7 +83,7 @@
     const res = await fetch(url, Object.assign({}, opts, {
       headers: Object.assign({}, opts.headers || {}, { Authorization: 'Bearer ' + token })
     }));
-    if (res.status === 401) { token = null; throw new DriveError('Sesiunea Google a expirat — reconectează-te.', 401); }
+    if (res.status === 401) { token = null; saveToken(); throw new DriveError('Sesiunea Google a expirat — reconectează-te.', 401); }
     if (!res.ok) {
       let msg = 'HTTP ' + res.status;
       try { const j = await res.json(); msg = (j.error && j.error.message) || msg; } catch (e) { /* ignore */ }
@@ -157,12 +166,12 @@
     return { action: 'none' };
   });
 
+  /** Deconectează DOAR acest dispozitiv. Nu folosim oauth2.revoke: acela retrage accesul aplicației
+   *  pentru tot contul Google și deconecta toate celelalte dispozitive. */
   function disconnect() {
-    if (token && global.google && google.accounts && google.accounts.oauth2) {
-      try { google.accounts.oauth2.revoke(token, () => {}); } catch (e) { /* ignore */ }
-    }
     token = null;
     expiresAt = 0;
+    saveToken();
     setFileId(null);
   }
 

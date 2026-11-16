@@ -1780,7 +1780,7 @@
     },
     connectDrive: () => connectDrive(),
     syncNow: () => runSync(),
-    disconnectDrive: async () => { if (await confirmDialog('Deconectare Google Drive', 'Datele rămân pe acest dispozitiv și în Drive, dar nu se vor mai sincroniza.', 'Deconectează')) disconnectDrive(); },
+    disconnectDrive: async () => { if (await confirmDialog('Deconectare Google Drive', 'Se deconectează doar acest dispozitiv. Datele rămân aici și în Drive, iar celelalte dispozitive rămân conectate.', 'Deconectează')) disconnectDrive(); },
     exportJson,
     importJson: () => $('#import-file').click(),
     loadDemo: async () => {
@@ -1982,6 +1982,9 @@
   window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); state.installPrompt = e; if (state.view === 'settings') render(); });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && state.data && applyRollovers(D())) { saveJSON(LS.DATA, D()); render(); }
+    if (document.visibilityState === 'visible' && settings.driveConnected && navigator.onLine && !pendingPush && !state.modal) {
+      if (DriveSync.hasValidToken()) runSync(); else setSync('auth', 'Atinge pentru a sincroniza cu Google Drive');
+    }
   });
   // Sincronizare între tab-uri deschise pe același dispozitiv
   window.addEventListener('storage', (e) => {
@@ -2000,7 +2003,10 @@
     // Profil cu parolă: o cere din nou la o sesiune nouă de browser
     state.profileId = m && (!m.auth || ssGet(SS_UNLOCK) === pid) ? pid : null;
 
-    if (settings.driveConnected) setSync(navigator.onLine ? 'auth' : 'offline', 'Atinge pentru a sincroniza cu Google Drive');
+    if (settings.driveConnected) {
+      if (navigator.onLine && DriveSync.hasValidToken()) setTimeout(runSync, 300);
+      else setSync(navigator.onLine ? 'auth' : 'offline', 'Atinge pentru a sincroniza cu Google Drive');
+    }
     if (clientId() && navigator.onLine) DriveSync.preload();
     render();
 
