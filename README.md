@@ -4,8 +4,8 @@ PWA static, fără backend și fără build. Datele stau în `localStorage` și,
 
 ## Rulare locală
 ```bash
-python -m http.server 8080
-# deschide http://localhost:8080
+python -m http.server 8090
+# deschide http://localhost:8090
 ```
 (Service Worker-ul și Google OAuth cer `http://localhost` sau HTTPS; nu merge cu `file://`.)
 
@@ -16,7 +16,7 @@ Urcă folderul așa cum este. Nu e nevoie de build.
 1. Google Cloud Console → proiect nou → activează **Google Drive API**.
 2. OAuth consent screen → External → Testing → adaugă emailurile familiei la *Test users*.
 3. Scope: `https://www.googleapis.com/auth/drive.appdata`
-4. Credentials → OAuth client ID → *Web application* → adaugă URL-ul de producție (și `http://localhost:8080` pentru teste) la *Authorized JavaScript origins*.
+4. Credentials → OAuth client ID → *Web application* → adaugă URL-ul de producție (și `http://localhost:8090` pentru teste — exact portul pe care rulezi local) la *Authorized JavaScript origins*.
 5. Pune Client ID-ul în aplicație (Setări) sau în `CONFIG.GOOGLE_CLIENT_ID` din `js/app.js`.
 
 Notă: `appDataFolder` aparține unui singur cont Google. Pentru aceleași date pe mai multe dispozitive, folosiți același cont Google.

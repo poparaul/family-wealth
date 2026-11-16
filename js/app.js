@@ -26,7 +26,7 @@
     { id: 'dashboard', label: 'Panou', icon: '📊' },
     { id: 'analysis', label: 'Analiză avere', icon: '🔎' },
     { id: 'investments', label: 'Investiții', icon: '📈' },
-    { id: 'grandparents', label: 'Conturi Bunici', icon: '🏦' },
+    { id: 'grandparents', label: 'Bănci & Depozite', icon: '🏦' },
     { id: 'realestate', label: 'Imobiliare', icon: '🏡' },
     { id: 'children', label: 'Copii', icon: '🐷' },
     { id: 'vehicles', label: 'Auto', icon: '🚗' },
@@ -200,7 +200,22 @@
   const D = () => state.data;
   const M = () => state.data.metadata;
   const baseCur = () => Calc.baseCurrency(M());
-  const money = (v, cur) => Calc.formatMoney(v, cur || baseCur());
+  // Moneda de afișare (per dispozitiv): totalurile calculate în moneda de bază se convertesc în ea.
+  // money(v)       → v e în moneda de bază, afișat în moneda aleasă
+  // money(v, cur)  → v e deja în moneda `cur` (ex. soldul original al unui cont), afișat ca atare
+  const dispCur = () => {
+    const c = settings.displayCurrency;
+    return c && (c === baseCur() || Calc.rateKnown(c, M())) ? c : baseCur();
+  };
+  const conv = (v) => { const c = dispCur(); return c === baseCur() ? v : v / +M().exchange_rates[c]; };
+  const money = (v, cur) => (cur ? Calc.formatMoney(v, cur) : Calc.formatMoney(conv(v), dispCur()));
+  const displayCurrencies = () => [baseCur(), ...Object.keys(M().exchange_rates || {}).filter((c) => c !== baseCur() && Calc.rateKnown(c, M()))];
+  function currencySwitch(extraCls = '') {
+    const list = displayCurrencies();
+    if (list.length < 2) return '';
+    return `<div class="cur-switch ${extraCls}" role="group" aria-label="Moneda de afișare">${list.map((c) =>
+      `<button data-action="setDisplayCurrency" data-value="${esc(c)}" aria-pressed="${c === dispCur()}" class="${c === dispCur() ? 'cur-active' : ''}">${esc(c)}</button>`).join('')}</div>`;
+  }
   const member = (id) => D().family_members.find((m) => m.id === id);
   const memberName = (id) => (member(id) ? member(id).name : 'Membru șters');
   const memberColor = (id) => { const i = D().family_members.findIndex((m) => m.id === id); return i < 0 || i >= MEMBER_COLORS.length ? Calc.OTHER_COLOR : MEMBER_COLORS[i]; };
@@ -914,9 +929,10 @@
   const avatar = (m, size = 'w-10 h-10 text-base') =>
     `<span class="${size} rounded-full inline-flex items-center justify-center font-semibold text-white shrink-0" style="background:${memberColor(m.id)}">${esc((m.name || '?').trim().charAt(0).toUpperCase())}</span>`;
 
-  function sectionHeader(title, subtitle, collection) {
+  function sectionHeader(title, subtitle, collection, extra = '') {
     return `<div class="flex flex-wrap items-end justify-between gap-3 mb-5">
       <div><h2 class="text-2xl font-bold tracking-tight">${esc(title)}</h2>${subtitle ? `<p class="text-slate-500 mt-1">${subtitle}</p>` : ''}</div>
+      ${extra}
       ${collection && isAdmin() ? `<button data-action="add" data-collection="${collection}" class="btn-primary">+ Adaugă</button>` : ''}
     </div>`;
   }
@@ -934,7 +950,7 @@
   function valueBlock(amount, cur) {
     const base = Calc.toBase(amount, cur, M());
     return `<div class="text-2xl font-bold tabular-nums">${money(amount, cur)}${rateWarning(cur)}</div>
-      ${cur && cur !== baseCur() && Calc.rateKnown(cur, M()) ? `<div class="text-sm text-slate-500 tabular-nums">≈ ${money(base)}</div>` : ''}`;
+      ${cur && cur !== dispCur() && Calc.rateKnown(cur, M()) ? `<div class="text-sm text-slate-500 tabular-nums">≈ ${money(base)}</div>` : ''}`;
   }
 
   function splitsHtml(splits, baseValue) {
@@ -1076,11 +1092,12 @@
     const missingRates = nw.assets.filter((a) => !Calc.rateKnown(a.currency, M()));
 
     return `
-      ${sectionHeader('Panou principal', `Actualizat: ${new Date(M().last_updated).getFullYear() > 2000 ? new Date(M().last_updated).toLocaleString('ro-RO') : '—'}`)}
+      ${sectionHeader('Panou principal', `Actualizat: ${new Date(M().last_updated).getFullYear() > 2000 ? new Date(M().last_updated).toLocaleString('ro-RO') : '—'}`, null, currencySwitch())}
       <div class="grid gap-4 lg:grid-cols-3">
         <section class="card lg:col-span-2 bg-gradient-to-br from-teal-700 to-teal-900 text-white border-0">
           <p class="text-teal-100 text-sm">Avere netă totală a familiei</p>
           <p class="text-4xl sm:text-5xl font-bold mt-1 tabular-nums">${money(nw.total)}</p>
+          ${dispCur() !== baseCur() ? `<p class="text-teal-100 text-sm tabular-nums">≈ ${Calc.formatMoney(nw.total, baseCur())}</p>` : ''}
           <p class="text-teal-100 text-sm mt-1">${nw.assets.length} active · EUR ${M().exchange_rates.EUR || '—'} · USD ${M().exchange_rates.USD || '—'}</p>
           ${nw.total > 0 ? `<div class="flex h-3 gap-[2px] rounded-full overflow-hidden mt-5">${cats.map((c) => `<div data-tip="${Calc.CATEGORIES[c].label} · ${esc(money(nw.byCat[c]))} · ${Math.round((nw.byCat[c] / nw.total) * 100)}%" style="flex:${nw.byCat[c]} 0 0;background:${Calc.CATEGORIES[c].color}"></div>`).join('')}</div>
           <ul class="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 mt-4 text-sm">${cats.map((c) => `<li class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full shrink-0 ring-2 ring-white/40" style="background:${Calc.CATEGORIES[c].color}"></span><span class="truncate">${Calc.CATEGORIES[c].label}</span><span class="ml-auto tabular-nums text-teal-50">${Math.round((nw.byCat[c] / nw.total) * 100)}%</span></li>`).join('')}</ul>` : ''}
@@ -1092,6 +1109,7 @@
           ${alertsHtml(true)}
         </section>
       </div>
+      ${dashboardPieCard(nw)}
       <section class="card mt-4">
         <div class="flex items-center justify-between gap-3 mb-4"><h3 class="font-semibold">Defalcare pe membri (Account Splitting)</h3>
           <button data-action="nav" data-view="analysis" class="btn-ghost btn-sm">🔎 Analiză detaliată →</button></div>
@@ -1113,13 +1131,40 @@
       </section>`;
   }
 
+  function dashboardPieCard(nw) {
+    if (!(nw.total > 0)) return '';
+    const ps = pieSettings();
+    const dim = ps.dashDim === 'member' ? 'member' : 'category';
+    let groups;
+    if (dim === 'category') groups = Object.keys(nw.byCat).map((k) => ({ key: k, value: nw.byCat[k] }));
+    else {
+      groups = Object.keys(nw.byMember).map((k) => ({ key: k, value: nw.byMember[k] }));
+      if (nw.unallocated > 0.5) groups.push({ key: Calc.UNALLOCATED, value: nw.unallocated });
+    }
+    const slices = foldSlices(sortGroups(groups, dim, ps.dashSort), dim);
+    const dimBtn = (v, l) => `<button data-action="setPieDim" data-value="${v}" aria-pressed="${dim === v}" class="${dim === v ? 'cur-active' : ''}">${l}</button>`;
+    return `<section class="card mt-4">
+      <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <h3 class="font-semibold">Distribuția averii</h3>
+        <div class="flex flex-wrap gap-2 no-print">
+          <div class="cur-switch" role="group" aria-label="Grupare">${dimBtn('category', 'Categorii')}${dimBtn('member', 'Membri')}</div>
+          ${pieSortSwitch('dash', ps.dashSort)}
+        </div>
+      </div>
+      <div class="grid gap-6 sm:grid-cols-[12rem_1fr] items-center">
+        <div class="mx-auto w-48 max-w-full">${donutSvg(slices, nw.total, 'Total familie')}</div>
+        ${pieLegend(slices, nw.total)}
+      </div>
+    </section>`;
+  }
+
   function renderViewerDashboard() {
     const me = currentMember();
     const list = Calc.memberAssets(D(), me.id);
     const total = sum(list.map((a) => a.share));
     return `
       <div class="card bg-gradient-to-br from-teal-700 to-teal-900 text-white border-0 viewer-xl">
-        <p class="text-teal-100">Bună, ${esc(me.name)}!</p>
+        <div class="flex flex-wrap items-center justify-between gap-2"><p class="text-teal-100">Bună, ${esc(me.name)}!</p>${currencySwitch('cur-switch-dark')}</div>
         <p class="text-teal-100 mt-4 text-sm">Partea dumneavoastră din patrimoniul familiei</p>
         <p class="text-5xl font-bold mt-1 tabular-nums">${money(total)}</p>
         <p class="text-teal-100 mt-2">${list.length} active</p>
@@ -1171,9 +1216,7 @@
     { id: 'list', label: 'Listă active' }
   ];
 
-  const dispCur = () => (currencies().includes(analysis.currency) && Calc.rateKnown(analysis.currency, M()) ? analysis.currency : baseCur());
-  const conv = (v) => { const c = dispCur(); return c === baseCur() ? v : v / +M().exchange_rates[c]; };
-  const dmoney = (v) => Calc.formatMoney(conv(v), dispCur());
+  const dmoney = (v) => money(v);
   const pctTxt = (v, total) => (total ? `${((v / total) * 100).toFixed(1)}%` : '0%');
 
   // Imobiliarele și vehiculele nu intră în Analiza averii (doar active financiare).
@@ -1198,7 +1241,75 @@
     if (dim === 'member') return key === Calc.UNALLOCATED ? { label: 'Nealocat', color: Calc.OTHER_COLOR } : { label: memberName(key), color: memberColor(key) };
     if (dim === 'category') return Calc.CATEGORIES[key];
     if (dim === 'currency') { const i = currencies().indexOf(key); return { label: key, color: i >= 0 && i < Calc.PALETTE.length ? Calc.PALETTE[i] : Calc.OTHER_COLOR }; }
-    return { label: key, color: '#2a78d6' }; // instituții: o singură nuanță; identitatea e dată de etichetă
+    return { label: key, color: institutionColor(key) };
+  }
+
+  // Culoarea unei instituții urmează instituția (ordine alfabetică în toate datele), nu poziția ei în clasament.
+  function institutionColor(name) {
+    const all = [...new Set(Calc.shareRows(D()).map((r) => r.institution))].sort((a, b) => a.localeCompare(b, 'ro'));
+    const i = all.indexOf(name);
+    return i >= 0 && i < Calc.PALETTE.length ? Calc.PALETTE[i] : Calc.OTHER_COLOR;
+  }
+
+  /* ---------- Grafic circular (donut) sortabil ---------- */
+  const PIE_SORTS = [['value', 'Mare → mic'], ['value_asc', 'Mic → mare'], ['name', 'A → Z']];
+  const pieSettings = () => Object.assign({ dashDim: 'category', dashSort: 'value', anaSort: 'value' }, settings.pie || {});
+
+  function sortGroups(groups, dim, sort) {
+    const label = (g) => groupMeta(dim, g.key).label;
+    const out = groups.slice();
+    if (sort === 'name') out.sort((a, b) => label(a).localeCompare(label(b), 'ro', { sensitivity: 'base', numeric: true }));
+    else if (sort === 'value_asc') out.sort((a, b) => a.value - b.value);
+    else out.sort((a, b) => b.value - a.value);
+    return out;
+  }
+
+  // Max 6 felii: dacă sunt mai multe, primele 5 ca valoare rămân, restul se strâng în „Alții” (gri, la final).
+  function foldSlices(groups, dim) {
+    const pos = groups.filter((g) => g.value > 0);
+    const items = pos.map((g) => ({ key: g.key, value: g.value, meta: groupMeta(dim, g.key), count: g.assets ? g.assets.size : null }));
+    if (items.length <= 6) return items;
+    const keep = new Set(pos.slice().sort((a, b) => b.value - a.value).slice(0, 5).map((g) => g.key));
+    const rest = items.filter((i) => !keep.has(i.key));
+    return items.filter((i) => keep.has(i.key)).concat([{ key: '__other', value: sum(rest.map((i) => i.value)), meta: { label: `Alții (${rest.length})`, color: Calc.OTHER_COLOR }, count: null }]);
+  }
+
+  function donutSvg(slices, total, centerLabel) {
+    if (!total || !slices.length) return '<p class="text-sm text-slate-500">Nu există date.</p>';
+    const C = 100, R = 92, r = 60;
+    const pt = (rad, a) => [(C + rad * Math.cos(a)).toFixed(2), (C + rad * Math.sin(a)).toFixed(2)];
+    let a0 = -Math.PI / 2;
+    const tip = (sl) => `${sl.meta.label} · ${money(sl.value)} · ${pctTxt(sl.value, total)}`;
+    const paths = slices.map((sl) => {
+      const f = sl.value / total;
+      if (f >= 0.9999) {
+        return `<circle cx="${C}" cy="${C}" r="${(R + r) / 2}" fill="none" stroke="${sl.meta.color}" stroke-width="${R - r}" data-tip="${esc(tip(sl))}"></circle>`;
+      }
+      const a1 = a0 + f * 2 * Math.PI;
+      const large = a1 - a0 > Math.PI ? 1 : 0;
+      const [x0, y0] = pt(R, a0), [x1, y1] = pt(R, a1), [x2, y2] = pt(r, a1), [x3, y3] = pt(r, a0);
+      const d = `M${x0} ${y0}A${R} ${R} 0 ${large} 1 ${x1} ${y1}L${x2} ${y2}A${r} ${r} 0 ${large} 0 ${x3} ${y3}Z`;
+      a0 = a1;
+      return `<path d="${d}" fill="${sl.meta.color}" stroke="#fff" stroke-width="2" stroke-linejoin="round" class="pie-slice" data-tip="${esc(tip(sl))}"></path>`;
+    }).join('');
+    const summary = slices.map((sl) => `${sl.meta.label} ${pctTxt(sl.value, total)}`).join(', ');
+    return `<div class="pie-wrap">
+      <svg viewBox="0 0 200 200" role="img" aria-label="${esc(centerLabel)}: ${esc(summary)}">${paths}</svg>
+      <div class="pie-center"><span class="pie-total tabular-nums">${money(total)}</span><span class="pie-label">${esc(centerLabel)}</span></div>
+    </div>`;
+  }
+
+  function pieSortSwitch(chart, current) {
+    return `<div class="cur-switch" role="group" aria-label="Sortare grafic">${PIE_SORTS.map(([v, l]) =>
+      `<button data-action="setPieSort" data-chart="${chart}" data-value="${v}" aria-pressed="${v === current}" class="${v === current ? 'cur-active' : ''}">${l}</button>`).join('')}</div>`;
+  }
+
+  function pieLegend(slices, total) {
+    return `<ul class="space-y-2 text-sm">${slices.map((sl) => `<li class="flex items-center gap-2" data-tip="${esc(sl.meta.label)} · ${esc(money(sl.value))} · ${pctTxt(sl.value, total)}">
+      <span class="w-2.5 h-2.5 rounded-sm shrink-0" style="background:${sl.meta.color}"></span>
+      <span class="flex-1 min-w-0 truncate">${esc(sl.meta.label)}</span>
+      <span class="tabular-nums font-semibold whitespace-nowrap">${money(sl.value)}</span>
+      <span class="tabular-nums text-slate-500 w-12 text-right">${pctTxt(sl.value, total)}</span></li>`).join('')}</ul>`;
   }
 
   function groupBy(rows, dim) {
@@ -1281,21 +1392,27 @@
     if (q) items = items.filter((i) => `${i.label} ${i.institution} ${i.holders.join(' ')}`.toLowerCase().includes(q));
     const dir = analysis.sortDir === 'asc' ? 1 : -1;
     const k = analysis.sortKey;
+    const keyOf = (i) => (k === 'value' ? i.value : k === 'cat' ? Calc.CATEGORIES[i.cat].label : k === 'holders' ? i.holders.join(', ') : (i[k] || '').toString());
     items.sort((a, b) => {
-      const va = k === 'value' ? a.value : k === 'cat' ? Calc.CATEGORIES[a.cat].label : (a[k] || '').toString();
-      const vb = k === 'value' ? b.value : k === 'cat' ? Calc.CATEGORIES[b.cat].label : (b[k] || '').toString();
-      return (typeof va === 'number' ? va - vb : va.localeCompare(vb, 'ro')) * dir;
+      const va = keyOf(a), vb = keyOf(b);
+      const c = typeof va === 'number' ? va - vb : va.localeCompare(vb, 'ro', { sensitivity: 'base', numeric: true });
+      return (c || b.value - a.value || a.label.localeCompare(b.label, 'ro')) * (c ? dir : 1); // egalitate → după valoare, apoi nume
     });
     return items;
   }
 
   function listTableHtml(rows) {
     const items = listItems(rows);
-    const th = (key, label, cls = '') => `<th class="${cls}"><button data-action="sortList" data-value="${key}" class="inline-flex items-center gap-1 font-semibold hover:text-slate-900">${label}${analysis.sortKey === key ? (analysis.sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</button></th>`;
+    const th = (key, label, cls = '') => {
+      const active = analysis.sortKey === key;
+      const arrow = active ? (analysis.sortDir === 'asc' ? '▲' : '▼') : '↕';
+      return `<th class="${cls}" aria-sort="${active ? (analysis.sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}">
+        <button data-action="sortList" data-value="${key}" title="Sortează după ${esc(label)}" class="sort-btn ${active ? 'sort-active' : ''}">${label}<span class="sort-arrow" aria-hidden="true">${arrow}</span></button></th>`;
+    };
     if (!items.length) return '<p class="text-sm text-slate-500 py-4">Niciun activ nu corespunde căutării.</p>';
     const total = sum(items.map((i) => i.value));
     return `<div class="overflow-x-auto -mx-1"><table class="matrix w-full text-sm">
-      <thead><tr>${th('label', 'Activ', 'text-left')}${th('cat', 'Categorie', 'text-left')}${th('institution', 'Instituție', 'text-left hidden md:table-cell')}<th class="text-left hidden sm:table-cell">Deținători</th>${th('value', analysisMembers().length ? 'Partea selecției' : 'Valoare')}</tr></thead>
+      <thead><tr>${th('label', 'Activ', 'text-left')}${th('cat', 'Categorie', 'text-left')}${th('institution', 'Instituție', 'text-left hidden md:table-cell')}${th('holders', 'Deținători', 'text-left hidden sm:table-cell')}${th('value', analysisMembers().length ? 'Partea selecției' : 'Valoare')}</tr></thead>
       <tbody>${items.map((i) => `<tr>
         <td class="text-left"><span class="font-medium">${esc(i.label)}</span>${i.currency !== baseCur() ? `<div class="text-xs text-slate-500">${esc(i.currency)}</div>` : ''}</td>
         <td class="text-left whitespace-nowrap"><span class="inline-flex items-center gap-1.5"><span class="w-2 h-2 rounded-sm" style="background:${Calc.CATEGORIES[i.cat].color}"></span>${Calc.CATEGORIES[i.cat].label}</span></td>
@@ -1329,8 +1446,13 @@
       <div id="analysis-list">${listTableHtml(rows)}</div>
       <div class="flex justify-end mt-3"><button data-action="exportCsv" class="btn-secondary btn-sm">⬇ Exportă CSV</button></div>`;
     else {
-      const g = groupBy(rows, analysis.group);
-      body = `${compositionBar(g, total, analysis.group)}<div class="mt-5">${barList(g, total, analysis.group)}</div>`;
+      const ps = pieSettings();
+      const g = sortGroups(groupBy(rows, analysis.group), analysis.group, ps.anaSort);
+      body = `<div class="flex flex-wrap items-center justify-end gap-2 mb-4 no-print"><span class="text-sm text-slate-500">Sortare</span>${pieSortSwitch('ana', ps.anaSort)}</div>
+        <div class="grid gap-6 md:grid-cols-[13rem_1fr] items-start">
+          <div class="mx-auto w-52 max-w-full">${donutSvg(foldSlices(g, analysis.group), total, 'Selecția')}</div>
+          <div>${barList(g, total, analysis.group)}</div>
+        </div>`;
     }
 
     return `${sectionHeader(admin ? 'Analiză avere' : 'Analiza averii tale', admin ? 'Filtrează pe membri și categorii și alege cum să grupezi valorile' : 'Filtrează pe categorii și alege cum să grupezi valorile')}
@@ -1351,7 +1473,7 @@
         <div class="card sm:col-span-2 bg-gradient-to-br from-teal-700 to-teal-900 text-white border-0">
           <p class="text-teal-100 text-sm">${selLabel}${catLabel}</p>
           <p class="text-4xl font-bold mt-1 tabular-nums">${dmoney(total)}</p>
-          ${dispCur() !== baseCur() ? `<p class="text-teal-100 text-sm mt-1 tabular-nums">≈ ${money(total)}</p>` : ''}
+          ${dispCur() !== baseCur() ? `<p class="text-teal-100 text-sm mt-1 tabular-nums">≈ ${Calc.formatMoney(total, baseCur())}</p>` : ''}
         </div>
         <div class="card grid grid-cols-2 sm:grid-cols-1 gap-3">
           <div><p class="text-xs text-slate-500">Din averea familiei</p><p class="text-2xl font-bold tabular-nums">${pctTxt(total, family)}</p></div>
@@ -1403,11 +1525,11 @@
       }).join('')}</div>` : emptyState('Niciun cont de investiții încă.', 'investment_accounts'));
   }
 
-  /* ---------- Conturi bunici ---------- */
+  /* ---------- Bănci & depozite (colecția grandparents_accounts, nume istoric) ---------- */
   function renderGrandparents() {
     const list = D().grandparents_accounts;
     const total = sum(list.map((a) => Calc.toBase(a.principal_amount, a.currency, M())));
-    return sectionHeader('Conturi Bunici', `Total: <strong>${money(total)}</strong> · ${list.length} conturi`, 'grandparents_accounts') +
+    return sectionHeader('Bănci & Depozite', `Total: <strong>${money(total)}</strong> · ${list.length} conturi`, 'grandparents_accounts') +
       (list.length ? `<div class="grid gap-4 md:grid-cols-2">${list.map((a) => {
         const base = Calc.toBase(a.principal_amount, a.currency, M());
         const days = Calc.daysUntil(a.maturity_date);
@@ -1961,6 +2083,9 @@
       Calc.equalSplit(inputs.length).forEach((v, i) => { inputs[i].value = v; });
       updateSplitTotal();
     },
+    setPieDim: (ds) => { settings.pie = Object.assign(pieSettings(), { dashDim: ds.value }); saveSettings(); render(); },
+    setPieSort: (ds) => { settings.pie = Object.assign(pieSettings(), { [ds.chart === 'ana' ? 'anaSort' : 'dashSort']: ds.value }); saveSettings(); render(); },
+    setDisplayCurrency: (ds) => { settings.displayCurrency = ds.value; saveSettings(); render(); },
     connectDrive: () => connectDrive(),
     switchDriveAccount: async () => {
       if (await confirmDialog('Schimbă contul Google', 'Alegi alt cont Google. Datele de pe acest dispozitiv vor fi înlocuite cu cele din Drive-ul contului ales (dacă există acolo).', 'Alege contul')) {
@@ -2097,7 +2222,7 @@
   document.addEventListener('change', (e) => {
     if (e.target.closest('#split-rows')) updateSplitTotal();
     if (e.target.closest('#modal-root')) refreshDepositForm();
-    if (e.target.id === 'analysis-currency') updateAnalysis(() => { analysis.currency = e.target.value; });
+    if (e.target.id === 'analysis-currency') { settings.displayCurrency = e.target.value; saveSettings(); render(); }
     if (e.target.id === 'import-file') {
       const file = e.target.files[0];
       e.target.value = '';

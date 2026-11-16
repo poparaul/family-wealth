@@ -10,7 +10,7 @@
 
   const CATEGORIES = {
     investment_accounts:   { label: 'Investiții',     color: PALETTE[0] },
-    grandparents_accounts: { label: 'Conturi bunici', color: PALETTE[1] },
+    grandparents_accounts: { label: 'Bănci & depozite', color: PALETTE[1] },
     real_estate:           { label: 'Imobiliare',     color: PALETTE[2] },
     children_savings:      { label: 'Economii copii', color: PALETTE[3] },
     vehicles:              { label: 'Vehicule',       color: PALETTE[4] }
