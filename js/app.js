@@ -2309,7 +2309,8 @@
     input.setAttribute('aria-expanded', 'false');
   }
   const comboIsOpen = (input) => !comboParts(input).menu.classList.contains('hidden');
-  document.addEventListener('focusin', (e) => { if (e.target.dataset && e.target.dataset.combo) comboOpen(e.target, false); });
+  // Lista NU se deschide la simplul focus (ex. focusul automat la deschiderea formularului),
+  // ci doar la click pe câmp / ▾, la tastare sau cu ↓.
   document.addEventListener('focusout', (e) => { if (e.target.dataset && e.target.dataset.combo) comboClose(e.target); });
   document.addEventListener('input', (e) => { if (e.target.dataset && e.target.dataset.combo) comboOpen(e.target, true); });
   document.addEventListener('mousedown', (e) => {
@@ -2320,8 +2321,8 @@
     if (e.target === parts.input) { if (!comboIsOpen(parts.input)) comboOpen(parts.input, false); return; }
     if (e.target.closest('[data-combo-toggle]')) {
       e.preventDefault();
-      if (document.activeElement !== parts.input) parts.input.focus(); // focusin deschide lista
-      else if (comboIsOpen(parts.input)) comboClose(parts.input);
+      if (document.activeElement !== parts.input) parts.input.focus();
+      if (comboIsOpen(parts.input)) comboClose(parts.input);
       else comboOpen(parts.input, false);
     }
   });
