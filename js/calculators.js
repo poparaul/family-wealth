@@ -215,7 +215,9 @@
   }
 
   function maturityAlerts(data, today = new Date(), within = 30) {
-    return (data.grandparents_accounts || [])
+    const invDeposits = (data.investment_accounts || []).filter((a) => isDeposit(a.account_type) && a.maturity_date)
+      .map((a) => Object.assign({}, a, { bank_name: a.platform, principal_amount: a.total_value, owner_id: null }));
+    return (data.grandparents_accounts || []).concat(invDeposits)
       .map((a) => ({ account: a, days: daysUntil(a.maturity_date, today) }))
       .filter((x) => x.days != null && x.days <= within)
       .sort((a, b) => a.days - b.days);
@@ -241,6 +243,33 @@
   }
 
   function annualInterest(acc) { return (num(acc.principal_amount) * num(acc.interest_rate)) / 100; }
+
+  const DEFAULT_INTEREST_TAX = 10; // impozit pe dobânzi reținut la sursă (RO); editabil pe fiecare depozit
+  const isDeposit = (type) => /depozit/i.test(type || '');
+
+  // Randamentul unui depozit la termen: dobândă brută, impozit, dobândă netă și valoarea la scadență.
+  // Perioada: data constituirii → scadență; altfel durata din tip („(6 luni)”); altfel 12 luni (estimare).
+  function depositReturn(acc) {
+    const principal = num(acc.principal_amount != null ? acc.principal_amount : acc.total_value);
+    const rate = num(acc.interest_rate);
+    const start = parseDate(acc.start_date), end = parseDate(acc.maturity_date);
+    let days = null, estimated = false;
+    if (start && end && end > start) days = Math.round((end - start) / 86400000);
+    else {
+      const m = String(acc.account_type || '').match(/(\d+)\s*(lun|lună|luna)/i);
+      const months = m ? +m[1] : 12;
+      days = Math.round((months * 365) / 12);
+      estimated = true;
+    }
+    const taxPct = acc.tax_rate == null || acc.tax_rate === '' ? DEFAULT_INTEREST_TAX : num(acc.tax_rate);
+    let gross = (principal * rate / 100) * days / 365;
+    let tax = gross * taxPct / 100;
+    let net = gross - tax;
+    let value = principal + net;
+    const manual = num(acc.maturity_value) > 0;
+    if (manual) { value = num(acc.maturity_value); net = value - principal; gross = taxPct < 100 ? net / (1 - taxPct / 100) : net; tax = gross - net; }
+    return { principal, rate, days, estimated, taxPct, gross, tax, net, value, manual };
+  }
 
   /* ---------- Formatare ---------- */
   function formatMoney(v, cur = 'RON', decimals = 0) {
@@ -271,7 +300,7 @@
     todayISO, monthKey, parseDate, daysUntil, alertLevel,
     assets, netWorth, memberAssets,
     vehicleAlerts, childReminders, maturityAlerts,
-    bonusProgress, vehicleAnnualCost, annualInterest,
+    bonusProgress, vehicleAnnualCost, annualInterest, depositReturn, isDeposit, DEFAULT_INTEREST_TAX,
     formatMoney, formatDate, formatDays
   };
 })(window);

@@ -28,6 +28,16 @@ button:disabled { cursor: default; }
 .input { width: 100%; border: 1px solid #cbd5e1; border-radius: .6rem; padding: .55rem .75rem; background: #fff; font-size: 16px; color: #1e293b; }
 .input:focus { border-color: #14b8a6; }
 .field { display: flex; flex-direction: column; gap: .3rem; }
+.field.hidden { display: none; }
+.combo { position: relative; }
+.combo-toggle { position: absolute; right: .25rem; top: 50%; transform: translateY(-50%); width: 2rem; height: 2rem; border-radius: .45rem; color: #64748b; font-size: .85rem; }
+.combo-toggle:hover { background: #f1f5f9; }
+.combo-menu { position: absolute; z-index: 60; left: 0; right: 0; top: calc(100% + .25rem); max-height: 15rem; overflow-y: auto; background: #fff;
+  border: 1px solid #cbd5e1; border-radius: .6rem; box-shadow: 0 10px 30px rgba(15, 23, 42, .12); padding: .25rem; }
+.combo-menu.hidden { display: none; }
+.combo-menu li { padding: .5rem .65rem; border-radius: .4rem; cursor: pointer; font-size: .9rem; }
+.combo-menu li:hover, .combo-menu li.combo-active { background: #f0fdfa; color: #115e59; }
+.combo-menu li.combo-sel { font-weight: 600; }
 .field-label { font-size: .8rem; font-weight: 600; color: #475569; }
 .field-hint { font-size: .75rem; color: #94a3b8; }
 

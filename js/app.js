@@ -18,7 +18,7 @@
   const ROLE_HINTS = {
     admin: 'Acces complet: editare, Google Drive, ghid de succesiune',
     viewer: 'Vede doar activele la care participă',
-    viewer_restricted: 'Vede doar propria pușculiță'
+    viewer_restricted: 'Vede pușculița și investițiile pe numele lui'
   };
   const MEMBER_COLORS = Calc.PALETTE; // al 9-lea membru și următorii primesc gri („Alții”), nu o nuanță generată
 
@@ -40,7 +40,22 @@
     { id: 'myassets', label: 'Activele mele', icon: '📁' }
   ];
 
-  const PLATFORMS = ['Tradeville', 'Interactive Brokers (IBKR)', 'CEC Bank', 'Banca Transilvania (BT)', 'BCR', 'BRD', 'ING Bank', 'Raiffeisen Bank', 'Titluri Tezaur', 'Fidelis', 'XTB', 'Revolut', 'Trezoreria Statului'];
+  const INVESTMENT_TYPES = ['Acțiuni BVB', 'Acțiuni internaționale', 'ETF-uri (ex. VWCE)', 'Titluri de stat (Fidelis / Tezaur)', 'Obligațiuni corporative',
+    'Fonduri mutuale', 'Pensie privată Pilon II', 'Pensie facultativă Pilon III', 'Asigurare de viață cu investiții', 'Aur / metale prețioase',
+    'Crypto (Bitcoin, Ethereum etc.)', 'Depozit la termen'];
+  const BANK_ACCOUNT_TYPES = ['Depozit la termen (1 lună)', 'Depozit la termen (3 luni)', 'Depozit la termen (6 luni)', 'Depozit la termen (12 luni)',
+    'Cont de economii', 'Cont curent', 'Titluri de stat (Tezaur)'];
+  const CHILD_ACCOUNT_TYPES = ['Cont Centenar Trezorerie', 'Cont de economii', 'Depozit la termen', 'Cont curent junior'];
+  // Sugestiile implicite + valorile deja folosite în date (ca să nu dispară nimic din ce ai scris înainte).
+  const usedValues = (pairs) => pairs.flatMap(([col, key]) => (D()[col] || []).map((x) => (x[key] || '').trim())).filter(Boolean);
+  const uniq = (arr) => [...new Map(arr.map((v) => [v.toLowerCase(), v])).values()];
+  const COMBO_LISTS = {
+    'dl-platforms': () => uniq([...PLATFORMS, ...usedValues([['investment_accounts', 'platform'], ['grandparents_accounts', 'bank_name']])]),
+    'dl-inv-types': () => uniq([...INVESTMENT_TYPES, ...usedValues([['investment_accounts', 'account_type']])]),
+    'dl-bank-types': () => uniq([...BANK_ACCOUNT_TYPES, ...usedValues([['grandparents_accounts', 'account_type']])]),
+    'dl-child-types': () => uniq([...CHILD_ACCOUNT_TYPES, ...usedValues([['children_savings', 'account_type']])])
+  };
+  const PLATFORMS = ['Tradeville', 'Interactive Brokers (IBKR)', 'CEC Bank', 'Banca Transilvania (BT)', 'BCR', 'BRD', 'ING Bank', 'Raiffeisen Bank', 'Titluri Tezaur', 'Fidelis', 'XTB', 'Trading 212', 'Revolut', 'Robinhood', 'Binance', 'Trezoreria Statului', 'NN Pensii', 'Allianz-Țiriac Pensii Private', 'Metropolitan Life Pensii', 'BCR Pensii', 'BRD Pensii', 'BT Pensii Private'];
 
   /* ======================================================================
      DATE DEMO (schema din specificație + câmpuri opționale compatibile)
@@ -425,24 +440,34 @@
       defaults: () => ({ platform: '', account_type: '', total_value: 0, currency: 'RON', notes: '', splits: defaultSplits() }),
       fields: [
         { k: 'platform', label: 'Platformă / Instituție', type: 'text', req: true, list: 'dl-platforms' },
-        { k: 'account_type', label: 'Tip cont / Instrumente', type: 'text' },
+        { k: 'account_type', label: 'Tip investiție / Instrumente', type: 'text', list: 'dl-inv-types', placeholder: 'Alege din listă sau scrie' },
         { k: 'total_value', label: 'Valoare totală', type: 'number', req: true, min: 0 },
         { k: 'currency', label: 'Monedă', type: 'currency', req: true },
+        { k: 'interest_rate', label: 'Dobândă anuală (%)', type: 'number', min: 0, max: 100, showIf: 'deposit' },
+        { k: 'start_date', label: 'Data constituirii', type: 'date', showIf: 'deposit' },
+        { k: 'maturity_date', label: 'Data scadenței', type: 'date', showIf: 'deposit' },
+        { k: 'tax_rate', label: 'Impozit pe dobândă (%)', type: 'number', min: 0, max: 100, hint: 'Implicit 10% (reținut de bancă)', showIf: 'deposit' },
+        { k: 'maturity_value', label: 'Valoare la scadență (din contract)', type: 'number', min: 0, hint: 'Opțional — gol = calcul automat', showIf: 'deposit' },
+        { type: 'preview', id: 'deposit-preview', showIf: 'deposit' },
         { k: 'notes', label: 'Note', type: 'textarea', wide: true }
       ]
     },
     grandparents_accounts: {
       singular: 'cont bancar', prefix: 'bank', splits: true,
-      defaults: () => ({ bank_name: '', account_type: '', owner_id: firstByRole('viewer'), iban_or_account: '', principal_amount: 0, interest_rate: 0, maturity_date: null, currency: 'RON', splits: [] }),
+      defaults: () => ({ bank_name: '', account_type: '', owner_id: firstByRole('viewer'), iban_or_account: '', principal_amount: 0, interest_rate: 0, start_date: null, maturity_date: null, tax_rate: 10, maturity_value: null, currency: 'RON', splits: [] }),
       fields: [
         { k: 'bank_name', label: 'Bancă / Instituție', type: 'text', req: true, list: 'dl-platforms' },
-        { k: 'account_type', label: 'Tip cont', type: 'text', placeholder: 'Ex: Depozit la termen (12 luni)' },
+        { k: 'account_type', label: 'Tip cont', type: 'text', list: 'dl-bank-types', placeholder: 'Alege din listă sau scrie' },
         { k: 'owner_id', label: 'Titular cont', type: 'member', req: true },
         { k: 'iban_or_account', label: 'IBAN / Nr. cont', type: 'text' },
         { k: 'principal_amount', label: 'Sumă (principal)', type: 'number', req: true, min: 0 },
         { k: 'currency', label: 'Monedă', type: 'currency', req: true },
         { k: 'interest_rate', label: 'Dobândă anuală (%)', type: 'number', min: 0, max: 100 },
-        { k: 'maturity_date', label: 'Data scadenței', type: 'date' }
+        { k: 'start_date', label: 'Data constituirii', type: 'date', hint: 'Pentru calculul exact al dobânzii' },
+        { k: 'maturity_date', label: 'Data scadenței', type: 'date' },
+        { k: 'tax_rate', label: 'Impozit pe dobândă (%)', type: 'number', min: 0, max: 100, hint: 'Implicit 10% (reținut de bancă)' },
+        { k: 'maturity_value', label: 'Valoare la scadență (din contract)', type: 'number', min: 0, hint: 'Opțional — gol = calcul automat' },
+        { type: 'preview', id: 'deposit-preview' }
       ]
     },
     real_estate: {
@@ -469,7 +494,7 @@
       }),
       fields: [
         { k: 'child_id', label: 'Copil', type: 'member', req: true, roles: ['viewer_restricted'] },
-        { k: 'account_type', label: 'Tip cont', type: 'text' },
+        { k: 'account_type', label: 'Tip cont', type: 'text', list: 'dl-child-types', placeholder: 'Alege din listă sau scrie' },
         { k: 'iban', label: 'IBAN', type: 'text' },
         { k: 'current_balance', label: 'Sold curent', type: 'number', req: true, min: 0 },
         { k: 'currency', label: 'Monedă', type: 'currency', req: true },
@@ -477,7 +502,7 @@
         { k: 'monthly_contribution.target_amount', label: 'Sumă lunară', type: 'number', min: 0 },
         { k: 'monthly_contribution.due_day', label: 'Ziua scadentă (1–28)', type: 'number', min: 1, max: 28, int: true },
         { k: 'monthly_contribution.is_paid_this_month', label: 'Alimentat luna aceasta', type: 'checkbox' },
-        { type: 'section', label: 'Prima de stat (Cont Centenar)' },
+        { type: 'section', label: 'Prima de stat (doar pentru Cont Centenar)' },
         { k: 'government_bonus_tracker.yearly_target', label: 'Prag anual', type: 'number', min: 0, hint: 'Implicit 1.200 RON' },
         { k: 'government_bonus_tracker.yearly_deposited', label: 'Depus anul acesta', type: 'number', min: 0 },
         { k: 'government_bonus_tracker.bonus_amount', label: 'Valoare primă / an', type: 'number', min: 0, hint: 'Implicit 600 RON' }
@@ -519,6 +544,9 @@
   function currencies() { return [baseCur(), ...Object.keys(M().exchange_rates || {}).filter((c) => c !== baseCur())]; }
 
   function fieldHtml(f, item) {
+    const hidden = f.showIf === 'deposit' && !Calc.isDeposit(item.account_type);
+    const showAttr = f.showIf ? `data-show-if="${f.showIf}"` : '';
+    if (f.type === 'preview') return `<div id="${f.id}" class="sm:col-span-2 ${hidden ? 'hidden' : ''}" ${showAttr}>${depositSummaryHtml(item, item.currency)}</div>`;
     if (f.type === 'section') return `<h4 class="sm:col-span-2 mt-2 pt-3 border-t border-slate-100 text-sm font-semibold text-slate-700">${esc(f.label)}</h4>`;
     const v = getPath(item, f.k);
     const id = 'f_' + f.k.replace(/\./g, '_');
@@ -546,11 +574,47 @@
       case 'select':
         input = `<select ${common} class="input">${f.options.map(([val, label]) => `<option value="${esc(val)}" ${val === v ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select>`; break;
       default:
-        input = `<input ${common} type="text" value="${esc(v)}" ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''} ${f.list ? `list="${f.list}"` : ''} class="input">`;
+        input = `<input ${common} type="text" value="${esc(v)}" ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''} class="input">`;
+        if (f.list) input = `<div class="combo">
+          <input ${common} type="text" value="${esc(v)}" ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''} data-combo="${f.list}" autocomplete="off" role="combobox" aria-expanded="false" class="input pr-9">
+          <button type="button" class="combo-toggle" data-combo-toggle tabindex="-1" aria-label="Arată opțiunile">▾</button>
+          <ul class="combo-menu hidden" role="listbox"></ul></div>`;
     }
-    return `<label class="field ${f.wide ? 'sm:col-span-2' : ''}" for="${id}">
+    return `<label class="field ${f.wide ? 'sm:col-span-2' : ''} ${hidden ? 'hidden' : ''}" for="${id}" ${showAttr}>
       <span class="field-label">${esc(f.label)}${f.req ? ' <span class="text-rose-500">*</span>' : ''}</span>
       ${input}${f.hint ? `<span class="field-hint">${esc(f.hint)}</span>` : ''}</label>`;
+  }
+
+  function depositSummaryHtml(acc, cur) {
+    const r = Calc.depositReturn(acc);
+    if (!r.principal || !r.rate) return `<p class="text-sm text-slate-500">Completează suma și dobânda ca să vezi cât câștigi la scadență.</p>`;
+    const period = r.estimated ? `${Math.round(r.days / 30.4)} luni (estimare)` : `${r.days} zile`;
+    return `<div class="rounded-xl bg-emerald-50 border border-emerald-100 p-3">
+      <dl class="grid grid-cols-2 sm:grid-cols-3 gap-2 text-sm">
+        <div class="stat"><dt>Perioadă</dt><dd>${period}</dd></div>
+        <div class="stat"><dt>Dobândă brută</dt><dd>${money(r.gross, cur)}</dd></div>
+        <div class="stat"><dt>Impozit (${Calc.num(r.taxPct)}%)</dt><dd>−${money(r.tax, cur)}</dd></div>
+        <div class="stat"><dt>Dobândă netă</dt><dd class="text-emerald-700 font-semibold">+${money(r.net, cur)}</dd></div>
+        <div class="stat col-span-2"><dt>Valoare la scadență${r.manual ? ' (din contract)' : ''}</dt><dd class="text-lg font-bold">${money(r.value, cur)}</dd></div>
+      </dl></div>`;
+  }
+
+  // Recalculează rezumatul depozitului și afișează/ascunde câmpurile de depozit în formularul deschis.
+  function refreshDepositForm() {
+    const root = $('#modal-root');
+    if (!root || !root.querySelector('[data-path]')) return;
+    const val = (k) => { const el = root.querySelector(`[data-path="${k}"]`); return el ? el.value : null; };
+    const numOrNull = (k) => { const v = val(k); return v == null || v === '' ? null : parseFloat(v); };
+    const acc = {
+      account_type: val('account_type'), interest_rate: numOrNull('interest_rate'), start_date: val('start_date') || null,
+      maturity_date: val('maturity_date') || null, tax_rate: numOrNull('tax_rate'), maturity_value: numOrNull('maturity_value')
+    };
+    if (root.querySelector('[data-path="principal_amount"]')) acc.principal_amount = numOrNull('principal_amount');
+    else acc.total_value = numOrNull('total_value');
+    const dep = Calc.isDeposit(acc.account_type);
+    root.querySelectorAll('[data-show-if="deposit"]').forEach((el) => el.classList.toggle('hidden', !dep));
+    const box = root.querySelector('#deposit-preview');
+    if (box) box.innerHTML = depositSummaryHtml(acc, val('currency') || baseCur());
   }
 
   function splitRowHtml(s) {
@@ -591,13 +655,12 @@
     el.className = `badge ${ok ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`;
   }
 
-  function openForm(collection, id) {
+  function openForm(collection, id, preset) {
     const schema = SCHEMAS[collection];
     const existing = id ? D()[collection].find((x) => x.id === id) : null;
     if (id && !existing) return;
-    const item = existing ? clone(existing) : schema.defaults();
+    const item = existing ? clone(existing) : Object.assign(schema.defaults(), preset || {});
     const body = `
-      <datalist id="dl-platforms">${PLATFORMS.map((p) => `<option value="${esc(p)}">`).join('')}</datalist>
       <div class="grid gap-3 sm:grid-cols-2">
         ${schema.fields.map((f) => fieldHtml(f, item)).join('')}
         ${schema.splits ? splitsEditorHtml(item.splits || []) : ''}
@@ -833,8 +896,8 @@
     </div>`).join('');
     const mHtml = maturities.map(({ account: a, days }) => `<div class="alert-indigo flex items-center gap-3">
       <span class="text-xl">🏦</span>
-      <div class="flex-1"><p class="font-medium">Scadență depozit — ${esc(a.bank_name)} (${esc(memberName(a.owner_id))})</p>
-      <p class="text-sm">${money(a.principal_amount, a.currency)} · ${Calc.formatDate(a.maturity_date)} · <strong>${days < 0 ? `scadent de ${-days} zile` : Calc.formatDays(days)}</strong></p></div></div>`).join('');
+      <div class="flex-1"><p class="font-medium">Scadență depozit — ${esc(a.bank_name)}${a.owner_id ? ` (${esc(memberName(a.owner_id))})` : ''}</p>
+      <p class="text-sm">${money(a.principal_amount, a.currency)} → <strong>${money(Calc.depositReturn(a).value, a.currency)}</strong> · ${Calc.formatDate(a.maturity_date)} · <strong>${days < 0 ? `scadent de ${-days} zile` : Calc.formatDays(days)}</strong></p></div></div>`).join('');
     return `<div class="space-y-3">${rHtml}${vHtml}${mHtml}</div>`;
   }
 
@@ -930,6 +993,7 @@
     loadJSON(LS.ANALYSIS, {}),
     { search: '' }
   );
+  analysis.cats = (analysis.cats || []).filter((c) => !['real_estate', 'vehicles'].includes(c));
   const saveAnalysis = () => { try { localStorage.setItem(LS.ANALYSIS, JSON.stringify(Object.assign({}, analysis, { search: '' }))); } catch (e) { /* ignore */ } };
 
   const GROUPS = [
@@ -946,13 +1010,18 @@
   const dmoney = (v) => Calc.formatMoney(conv(v), dispCur());
   const pctTxt = (v, total) => (total ? `${((v / total) * 100).toFixed(1)}%` : '0%');
 
+  // Imobiliarele și vehiculele nu intră în Analiza averii (doar active financiare).
+  const ANALYSIS_EXCLUDED = ['real_estate', 'vehicles'];
+  const ANALYSIS_CATS = Object.keys(Calc.CATEGORIES).filter((c) => !ANALYSIS_EXCLUDED.includes(c));
+  const analysisBaseRows = () => Calc.shareRows(D()).filter((r) => ANALYSIS_CATS.includes(r.cat));
+
   function analysisMembers() {
     if (!isAdmin()) return [state.profileId];
     return analysis.members.filter((id) => id === Calc.UNALLOCATED || member(id));
   }
 
   function analysisRows() {
-    let rows = Calc.shareRows(D());
+    let rows = analysisBaseRows();
     const mems = analysisMembers();
     if (mems.length) rows = rows.filter((r) => mems.includes(r.member_id));
     if (analysis.cats.length) rows = rows.filter((r) => analysis.cats.includes(r.cat));
@@ -1077,10 +1146,10 @@
     if (!groups.some((g) => g.id === analysis.group)) analysis.group = admin ? 'member' : 'category';
     const rows = analysisRows();
     const total = sum(rows.map((r) => r.value));
-    const family = Calc.netWorth(D()).total;
+    const family = sum(analysisBaseRows().map((r) => r.value));
     const assetCount = new Set(rows.map((r) => r.assetId)).size;
     const mems = analysisMembers();
-    const hasUnalloc = Calc.shareRows(D()).some((r) => r.member_id === Calc.UNALLOCATED);
+    const hasUnalloc = analysisBaseRows().some((r) => r.member_id === Calc.UNALLOCATED);
     const filtered = admin && (analysis.members.length || analysis.cats.length);
 
     const selLabel = !admin ? `Partea ta (${esc(currentMember().name)})`
@@ -1106,7 +1175,7 @@
           ${hasUnalloc ? chip('toggleMember', Calc.UNALLOCATED, 'Nealocat', analysis.members.includes(Calc.UNALLOCATED), Calc.OTHER_COLOR) : ''}</div>` : ''}
         <div class="flex flex-wrap items-center gap-2"><span class="filter-label">Categorii</span>
           ${chip('allCats', '', 'Toate', !analysis.cats.length)}
-          ${Object.keys(Calc.CATEGORIES).map((c) => chip('toggleCat', c, Calc.CATEGORIES[c].label, analysis.cats.includes(c), Calc.CATEGORIES[c].color)).join('')}</div>
+          ${ANALYSIS_CATS.map((c) => chip('toggleCat', c, Calc.CATEGORIES[c].label, analysis.cats.includes(c), Calc.CATEGORIES[c].color)).join('')}</div>
         <div class="flex flex-wrap items-center gap-2"><span class="filter-label">Monedă</span>
           <select id="analysis-currency" class="input w-auto py-1.5" aria-label="Moneda de afișare">${currencies().filter((c) => Calc.rateKnown(c, M())).map((c) => `<option ${c === dispCur() ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
           ${filtered ? '<button data-action="resetAnalysis" class="btn-ghost btn-sm ml-auto">✕ Resetează filtrele</button>' : ''}</div>
@@ -1158,6 +1227,10 @@
         return `<article class="card">
           <div class="flex items-start justify-between gap-3"><div class="min-w-0"><h3 class="font-semibold text-lg">${esc(a.platform)}</h3><p class="text-sm text-slate-500">${esc(a.account_type)}</p></div>${cardActions('investment_accounts', a.id)}</div>
           <div class="mt-3">${valueBlock(a.total_value, a.currency)}</div>
+          ${Calc.isDeposit(a.account_type) && (Calc.num(a.interest_rate) > 0 || a.maturity_date) ? `<dl class="grid grid-cols-2 gap-2 mt-3 text-sm">
+            <div class="stat"><dt>Dobândă</dt><dd>${Calc.num(a.interest_rate)}% / an</dd></div>
+            <div class="stat"><dt>Scadență</dt><dd>${Calc.formatDate(a.maturity_date)}${Calc.daysUntil(a.maturity_date) != null ? ` <span class="badge bg-slate-100 text-slate-600">${Calc.daysUntil(a.maturity_date) < 0 ? 'scadent' : Calc.formatDays(Calc.daysUntil(a.maturity_date))}</span>` : ''}</dd></div>
+          </dl>${Calc.num(a.interest_rate) > 0 ? `<div class="mt-3">${depositSummaryHtml(a, a.currency)}</div>` : ''}` : ''}
           ${splitsHtml(a.splits, base)}
           ${a.notes ? `<p class="mt-3 text-sm text-slate-600 border-t border-slate-100 pt-3">${esc(a.notes)}</p>` : ''}
         </article>`;
@@ -1181,9 +1254,11 @@
           <dl class="grid grid-cols-2 gap-2 mt-3 text-sm">
             <div class="stat"><dt>Dobândă</dt><dd>${Calc.num(a.interest_rate)}% / an</dd></div>
             <div class="stat"><dt>Dobândă anuală est.</dt><dd>${money(Calc.annualInterest(a), a.currency)}</dd></div>
+            ${a.start_date ? `<div class="stat col-span-2"><dt>Constituit</dt><dd>${Calc.formatDate(a.start_date)}</dd></div>` : ''}
             <div class="stat col-span-2"><dt>Scadență</dt><dd>${Calc.formatDate(a.maturity_date)} ${days != null ? `<span class="badge ${lvl ? LEVEL_BADGE[lvl] : 'bg-slate-100 text-slate-600'}">${days < 0 ? `scadent de ${-days} zile` : Calc.formatDays(days)}</span>` : ''}</dd></div>
             ${a.iban_or_account ? `<div class="stat col-span-2"><dt>IBAN / Cont</dt><dd class="font-mono text-xs break-all">${esc(a.iban_or_account)}</dd></div>` : ''}
           </dl>
+          ${Calc.num(a.interest_rate) > 0 ? `<div class="mt-3">${depositSummaryHtml(a, a.currency)}</div>` : ''}
           ${splitsHtml(splits, base)}
         </article>`;
       }).join('')}</div>` : emptyState('Niciun cont bancar adăugat.', 'grandparents_accounts'));
@@ -1209,25 +1284,28 @@
   }
 
   /* ---------- Copii ---------- */
+  const isCentenar = (a) => /centenar/i.test(a.account_type || '');
+
   function childAccountCard(a, { kid = false } = {}) {
     const p = Calc.bonusProgress(a);
+    const centenar = isCentenar(a);
     const mc = a.monthly_contribution;
     const color = '#ec4899';
     const history = a.balance_history && a.balance_history.length ? a.balance_history : [{ date: Calc.todayISO(), balance: a.current_balance }];
     return `<article class="card ${kid ? 'p-6 sm:p-8' : ''}">
       <div class="flex items-start justify-between gap-3">
-        <div class="min-w-0"><h3 class="font-semibold ${kid ? 'text-xl' : 'text-lg'}">${kid ? '🐷 Pușculița mea' : esc(memberName(a.child_id))}</h3>
+        <div class="min-w-0"><h3 class="font-semibold ${kid ? 'text-xl' : 'text-lg'}">${kid ? (centenar ? '🐷 Pușculița mea' : `🐷 ${esc(a.account_type || 'Contul meu')}`) : esc(memberName(a.child_id))}</h3>
         <p class="text-sm text-slate-500">${esc(a.account_type)}${!kid && a.iban ? ` · <span class="font-mono text-xs">${esc(a.iban)}</span>` : ''}</p></div>
         ${kid ? '' : cardActions('children_savings', a.id)}
       </div>
       <p class="${kid ? 'text-5xl sm:text-6xl' : 'text-3xl'} font-bold mt-3 tabular-nums" style="color:${color}">${money(a.current_balance, a.currency)}</p>
-      <div class="mt-5">
+      ${centenar ? `<div class="mt-5">
         <div class="flex justify-between text-sm mb-1.5"><span class="font-medium">${kid ? 'Drumul spre bonusul de la stat' : `Prag anual pentru prima de stat (${a.tracker_year || new Date().getFullYear()})`}</span><span class="tabular-nums">${money(p.deposited)} / ${money(p.target)}</span></div>
         ${progressBar(p.pct, p.eligible ? '#10b981' : color, kid ? 'h-6' : 'h-3')}
         <p class="text-sm mt-2 ${p.eligible ? 'text-emerald-700 font-medium' : 'text-slate-600'}">${p.eligible
           ? `🎉 ${kid ? 'Super! Vei primi' : 'Prag atins — eligibil pentru'} prima de ${money(p.bonus)}${kid ? ' de la stat!' : '.'}`
           : `${kid ? 'Mai trebuie' : 'Mai sunt necesari'} ${money(p.remaining)} ${kid ? 'ca să primești' : 'pentru prima de'} ${kid ? `${money(p.bonus)} cadou de la stat ✨` : money(p.bonus) + '/an.'}`}</p>
-      </div>
+      </div>` : ''}
       ${!kid ? `<div class="mt-4 flex flex-wrap items-center gap-3 text-sm border-t border-slate-100 pt-4">
         <span>Cotizație: <strong>${money(mc.target_amount, a.currency)}</strong> / lună, ziua ${mc.due_day}</span>
         ${mc.is_paid_this_month ? `<span class="badge bg-emerald-100 text-emerald-800">✓ Alimentat luna aceasta</span>` : `<span class="badge bg-amber-100 text-amber-800">Neachitat luna aceasta</span>`}
@@ -1238,12 +1316,67 @@
     </article>`;
   }
 
+  const CAT_ICONS = { investment_accounts: '📈', grandparents_accounts: '🏦', real_estate: '🏡', vehicles: '🚗', children_savings: '🐷' };
+  const CAT_VIEWS = { investment_accounts: 'investments', grandparents_accounts: 'grandparents', real_estate: 'realestate', vehicles: 'vehicles' };
+
+  // Cota copilului din toate activele, în afară de conturile de economii pentru copii (afișate separat).
+  const kidShareRows = (memberId) => Calc.shareRows(D())
+    .filter((r) => r.member_id === memberId && r.cat !== 'children_savings' && r.value > 0)
+    .sort((a, b) => b.value - a.value);
+
+  function childPortfolioCard(k) {
+    const rows = kidShareRows(k.id);
+    const savings = D().children_savings.filter((a) => a.child_id === k.id);
+    const total = sum(rows.map((r) => r.value)) + sum(savings.map((a) => Calc.toBase(a.current_balance, a.currency, M())));
+    const catLabel = (c) => (Calc.CATEGORIES[c] ? Calc.CATEGORIES[c].label : '');
+    return `<article class="card">
+      <div class="flex flex-wrap items-center gap-3">
+        ${avatar(k, 'w-10 h-10 text-base')}
+        <div class="flex-1 min-w-[10rem]"><h3 class="font-semibold text-lg">${esc(k.name)}</h3>
+          <p class="text-sm text-slate-500">Total pe numele copilului: <strong>${money(total)}</strong></p></div>
+        ${isAdmin() ? `<button data-action="addChildInvestment" data-id="${esc(k.id)}" class="btn-primary btn-sm no-print">+ Adaugă investiție</button>` : ''}
+      </div>
+      ${rows.length || savings.length ? `<ul class="mt-4 divide-y divide-slate-100 text-sm">
+        ${savings.map((a) => `<li class="flex items-center gap-3 py-2"><span class="text-lg">🐷</span>
+          <span class="flex-1 min-w-0"><span class="block truncate">${esc(a.account_type || 'Cont de economii')}</span><span class="text-xs text-slate-500">${esc(catLabel('children_savings'))}</span></span>
+          <span class="font-semibold tabular-nums">${money(a.current_balance, a.currency)}</span></li>`).join('')}
+        ${rows.map((r) => `<li class="flex items-center gap-3 py-2"><span class="text-lg">${CAT_ICONS[r.cat] || '💰'}</span>
+          <span class="flex-1 min-w-0"><span class="block truncate">${esc(r.label)}</span>
+            <span class="text-xs text-slate-500">${esc(catLabel(r.cat))}${r.pct < 99.99 ? ` · cota copilului ${Math.round(r.pct * 100) / 100}%` : ''}</span></span>
+          <span class="font-semibold tabular-nums">${money(r.value)}</span>
+          ${CAT_VIEWS[r.cat] ? `<button data-action="nav" data-view="${CAT_VIEWS[r.cat]}" class="btn-ghost btn-sm no-print" title="Deschide secțiunea">→</button>` : ''}</li>`).join('')}
+      </ul>` : `<p class="mt-3 text-sm text-slate-500">Nicio investiție pe numele copilului încă.</p>`}
+    </article>`;
+  }
+
+  // Tipurile de investiții care se pot adăuga pentru un copil; copilul e precompletat ca titular.
+  const childInvestmentOptions = (childId) => [
+    { c: 'investment_accounts', icon: '📈', t: 'Cont de investiții / brokeraj', d: 'Acțiuni, ETF-uri, titluri de stat, fonduri, Pilon III, aur, crypto…',
+      preset: { splits: [{ member_id: childId, percentage: 100 }] } },
+    { c: 'grandparents_accounts', icon: '🏦', t: 'Depozit / cont bancar', d: 'Depozit la termen, cu dobândă și scadență',
+      preset: { owner_id: childId, splits: [{ member_id: childId, percentage: 100 }] } },
+    { c: 'children_savings', icon: '🐷', t: 'Cont de economii / Cont Centenar', d: 'Cu cotizație lunară; prima de stat se urmărește doar la Cont Centenar',
+      preset: { child_id: childId } },
+    { c: 'real_estate', icon: '🏡', t: 'Imobil / teren', d: 'Proprietate pe numele copilului', preset: { owner_id: childId } }
+  ];
+
+  function openChildInvestmentPicker(childId) {
+    const kid = member(childId);
+    if (!kid) return;
+    openModal({
+      title: `Adaugă investiție pentru ${kid.name}`, noFooter: true,
+      body: `<div class="grid gap-2">${childInvestmentOptions(childId).map((o, i) => `<button type="button" data-action="pickChildInvestment" data-id="${esc(childId)}" data-index="${i}" class="card text-left flex items-center gap-3 hover:border-teal-400">
+        <span class="text-2xl">${o.icon}</span><span><span class="block font-medium">${esc(o.t)}</span><span class="block text-sm text-slate-500">${esc(o.d)}</span></span></button>`).join('')}</div>`
+    });
+  }
+
   function renderChildren() {
     const list = D().children_savings;
     const kids = D().family_members.filter((m) => m.role === 'viewer_restricted');
-    return sectionHeader('Economii Copii & Cont Centenar', 'Prag anual de 1.200 RON pentru prima de stat de 600 RON/an', 'children_savings') +
-      (list.length ? `<div class="grid gap-4 lg:grid-cols-2">${list.map((a) => childAccountCard(a)).join('')}</div>` : emptyState('Niciun cont de economii pentru copii.', 'children_savings')) +
-      (kids.length ? `<div class="card mt-4 flex flex-wrap items-center gap-3 no-print"><span class="text-2xl">🧒</span><div class="flex-1 min-w-[12rem]"><p class="font-medium">Modul Copil</p><p class="text-sm text-slate-500">Copilul vede doar propria pușculiță. ${currentMember().auth ? 'Revenirea la profilul tău cere parola.' : 'Setează-ți o parolă (🔑 sus) ca să nu poată trece copilul în profilul tău.'}</p></div>
+    return sectionHeader('Economii & Investiții Copii', 'Toate activele pe numele copiilor · Cont Centenar: prag anual de 1.200 RON pentru prima de 600 RON/an', 'children_savings') +
+      (kids.length ? `<div class="grid gap-4 lg:grid-cols-2 mb-6">${kids.map(childPortfolioCard).join('')}</div>` : '') +
+      (list.length ? `<h3 class="font-semibold text-slate-700 mb-2">Conturi de economii</h3><div class="grid gap-4 lg:grid-cols-2">${list.map((a) => childAccountCard(a)).join('')}</div>` : emptyState('Niciun cont de economii pentru copii.', 'children_savings')) +
+      (kids.length ? `<div class="card mt-4 flex flex-wrap items-center gap-3 no-print"><span class="text-2xl">🧒</span><div class="flex-1 min-w-[12rem]"><p class="font-medium">Modul Copil</p><p class="text-sm text-slate-500">Copilul vede pușculița și investițiile pe numele lui. ${currentMember().auth ? 'Revenirea la profilul tău cere parola.' : 'Setează-ți o parolă (🔑 sus) ca să nu poată trece copilul în profilul tău.'}</p></div>
         ${kids.map((k) => `<button data-action="selectProfile" data-id="${esc(k.id)}" class="btn-secondary">${avatar(k, 'w-6 h-6 text-xs')} ${esc(k.name)}</button>`).join('')}</div>` : '');
   }
 
@@ -1259,7 +1392,25 @@
       </header>
       <main class="max-w-3xl mx-auto px-4 py-6 space-y-5">
         ${accs.length ? accs.map((a) => childAccountCard(a, { kid: true })).join('') : `<div class="card text-center py-12"><p class="text-5xl">🐷</p><p class="mt-3 text-slate-600">Pușculița ta va apărea aici în curând!</p></div>`}
+        ${kidInvestmentsCard(me.id)}
       </main></div>`;
+  }
+
+  // Activele (altele decât pușculița) în care copilul are o cotă — investiții, depozite, imobiliare, vehicule.
+  function kidInvestmentsCard(memberId) {
+    const rows = kidShareRows(memberId);
+    if (!rows.length) return '';
+    const total = sum(rows.map((r) => r.value));
+    return `<section class="card p-6 sm:p-8">
+      <h2 class="font-semibold text-xl">💼 Investițiile pe numele meu</h2>
+      <p class="text-4xl font-bold mt-3 tabular-nums text-emerald-600">${money(total)}</p>
+      <p class="text-sm text-slate-500 mt-1">Bani pe care familia i-a pus deoparte pentru tine și care cresc în timp.</p>
+      <ul class="mt-5 space-y-3">${rows.map((r) => `<li class="flex items-center gap-3">
+        <span class="text-2xl shrink-0">${CAT_ICONS[r.cat] || '💰'}</span>
+        <div class="flex-1 min-w-0"><p class="font-medium truncate">${esc(r.label)}</p>
+          ${r.pct < 99.99 ? `<p class="text-xs text-slate-500">Partea ta: ${Math.round(r.pct * 100) / 100}%</p>` : ''}</div>
+        <span class="font-semibold tabular-nums">${money(r.value)}</span></li>`).join('')}</ul>
+    </section>`;
   }
 
   /* ---------- Vehicule ---------- */
@@ -1586,6 +1737,13 @@
     nav: (ds) => { state.view = ds.view; window.scrollTo(0, 0); render(); },
     'nav-settings': () => { if (isAdmin()) { state.view = 'settings'; render(); } },
     add: (ds) => openForm(ds.collection),
+    addChildInvestment: (ds) => { if (isAdmin()) openChildInvestmentPicker(ds.id); },
+    pickChildInvestment: (ds) => {
+      const o = childInvestmentOptions(ds.id)[+ds.index];
+      if (!o || !isAdmin()) return;
+      closeModal();
+      openForm(o.c, null, o.preset);
+    },
     edit: (ds) => openForm(ds.collection, ds.id),
     delete: (ds) => deleteItem(ds.collection, ds.id),
     closeModal: () => { const m = state.modal; closeModal(); if (m && m.onCancel) m.onCancel(); },
@@ -1723,10 +1881,12 @@
 
   document.addEventListener('input', (e) => {
     if (e.target.closest('#split-rows')) updateSplitTotal();
+    if (e.target.closest('#modal-root')) refreshDepositForm();
     if (e.target.id === 'analysis-search') { analysis.search = e.target.value; const box = $('#analysis-list'); if (box) box.innerHTML = listTableHtml(analysisRows()); }
   });
   document.addEventListener('change', (e) => {
     if (e.target.closest('#split-rows')) updateSplitTotal();
+    if (e.target.closest('#modal-root')) refreshDepositForm();
     if (e.target.id === 'analysis-currency') updateAnalysis(() => { analysis.currency = e.target.value; });
     if (e.target.id === 'import-file') {
       const file = e.target.files[0];
@@ -1743,7 +1903,59 @@
     }
   });
 
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.modal) actions.closeModal(); });
+  /* Dropdown cu sugestii (combo): la focus/▾ arată toate opțiunile; la tastare filtrează; se poate scrie și o valoare nouă. */
+  const comboParts = (el) => { const box = el && el.closest('.combo'); return box ? { box, input: box.querySelector('[data-combo]'), menu: box.querySelector('.combo-menu') } : null; };
+  function comboOpen(input, filter) {
+    const { menu } = comboParts(input);
+    const q = filter ? input.value.trim().toLowerCase() : '';
+    const opts = (COMBO_LISTS[input.dataset.combo] || (() => []))().filter((o) => !q || o.toLowerCase().includes(q));
+    if (!opts.length) { comboClose(input); return; }
+    menu.innerHTML = opts.map((o) => `<li role="option" data-value="${esc(o)}" class="${o === input.value ? 'combo-sel' : ''}">${esc(o)}</li>`).join('');
+    menu.classList.remove('hidden');
+    input.setAttribute('aria-expanded', 'true');
+  }
+  function comboClose(input) {
+    const { menu } = comboParts(input);
+    menu.classList.add('hidden'); menu.innerHTML = '';
+    input.setAttribute('aria-expanded', 'false');
+  }
+  const comboIsOpen = (input) => !comboParts(input).menu.classList.contains('hidden');
+  document.addEventListener('focusin', (e) => { if (e.target.dataset && e.target.dataset.combo) comboOpen(e.target, false); });
+  document.addEventListener('focusout', (e) => { if (e.target.dataset && e.target.dataset.combo) comboClose(e.target); });
+  document.addEventListener('input', (e) => { if (e.target.dataset && e.target.dataset.combo) comboOpen(e.target, true); });
+  document.addEventListener('mousedown', (e) => {
+    const parts = comboParts(e.target);
+    if (!parts) return;
+    const li = e.target.closest('.combo-menu li');
+    if (li) { e.preventDefault(); parts.input.value = li.dataset.value; comboClose(parts.input); refreshDepositForm(); return; }
+    if (e.target === parts.input) { if (!comboIsOpen(parts.input)) comboOpen(parts.input, false); return; }
+    if (e.target.closest('[data-combo-toggle]')) {
+      e.preventDefault();
+      if (document.activeElement !== parts.input) parts.input.focus(); // focusin deschide lista
+      else if (comboIsOpen(parts.input)) comboClose(parts.input);
+      else comboOpen(parts.input, false);
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    const input = e.target.dataset && e.target.dataset.combo ? e.target : null;
+    if (!input) return;
+    const { menu } = comboParts(input);
+    const items = [...menu.querySelectorAll('li')];
+    const cur = items.findIndex((li) => li.classList.contains('combo-active'));
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!comboIsOpen(input)) { comboOpen(input, false); return; }
+      const next = items.length ? (cur + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length : -1;
+      items.forEach((li, i) => li.classList.toggle('combo-active', i === next));
+      if (items[next]) items[next].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter' && comboIsOpen(input) && cur >= 0) {
+      e.preventDefault(); input.value = items[cur].dataset.value; comboClose(input); refreshDepositForm();
+    } else if (e.key === 'Escape' && comboIsOpen(input)) {
+      e.preventDefault(); comboClose(input);
+    }
+  }, true);
+
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.modal && !e.defaultPrevented) actions.closeModal(); });
 
   /* Tooltip la hover pentru orice element cu data-tip (bare, segmente, celule) */
   const tip = document.createElement('div');
