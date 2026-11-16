@@ -1043,13 +1043,16 @@
           <h1 class="font-semibold leading-tight truncate">Patrimoniu Familial</h1>
           <p class="text-xs text-slate-500 truncate">${esc(me.name)} · ${ROLE_LABELS[me.role]}</p>
         </div>
-        ${isAdmin() ? `<button data-action="toggleMine" class="mine-toggle ${mineOnly() ? 'mine-on' : ''}" aria-pressed="${mineOnly()}" title="${mineOnly() ? 'Arată toată familia' : 'Arată doar activele mele'}">👤<span class="hidden sm:inline">Doar ale mele</span></button>` : ''}
         <div id="sync-badge">${syncBadgeHtml()}</div>
         ${FWVault.enabled() ? '<button data-action="lockNow" class="btn-ghost btn-sm" title="Blochează (cere parola familiei)" aria-label="Blochează">🔒</button>' : ''}
         <button data-action="ownPassword" class="btn-ghost btn-sm" title="${me.auth ? 'Schimbă parola' : 'Setează o parolă'}" aria-label="Parola mea">🔑</button>
         <button data-action="switchProfile" class="btn-secondary btn-sm" title="Schimbă profilul">${avatar(me, 'w-6 h-6 text-xs')}<span class="hidden sm:inline">Schimbă</span></button>
       </div>
-      <nav class="max-w-6xl mx-auto px-2 flex gap-1 overflow-x-auto no-scrollbar" aria-label="Module">
+      <nav class="max-w-6xl mx-auto px-2 flex items-center gap-1 overflow-x-auto no-scrollbar" aria-label="Module">
+        ${isAdmin() ? `<div class="scope-switch" role="group" aria-label="Ce date afișez">
+          <button data-action="setMine" data-value="0" aria-pressed="${!mineOnly()}" class="${mineOnly() ? '' : 'scope-on'}" title="Arată toată familia">👪 Familie</button>
+          <button data-action="setMine" data-value="1" aria-pressed="${mineOnly()}" class="${mineOnly() ? 'scope-on' : ''}" title="Arată doar activele mele">👤 Ale mele</button>
+        </div>` : ''}
         ${nav.map((n) => `<button data-action="nav" data-view="${n.id}" class="tab ${state.view === n.id ? 'tab-active' : ''}" ${state.view === n.id ? 'aria-current="page"' : ''}><span aria-hidden="true">${n.icon}</span> ${n.label}</button>`).join('')}
       </nav>
     </header>
@@ -2118,6 +2121,7 @@
       updateSplitTotal();
     },
     toggleMine: () => { settings.mineOnly = !settings.mineOnly; saveSettings(); render(); },
+    setMine: (ds) => { settings.mineOnly = ds.value === '1'; saveSettings(); render(); },
     setPieDim: (ds) => { settings.pie = Object.assign(pieSettings(), { dashDim: ds.value }); saveSettings(); render(); },
     setPieSort: (ds) => { settings.pie = Object.assign(pieSettings(), { [ds.chart === 'ana' ? 'anaSort' : 'dashSort']: ds.value }); saveSettings(); render(); },
     setDisplayCurrency: (ds) => { settings.displayCurrency = ds.value; saveSettings(); render(); },

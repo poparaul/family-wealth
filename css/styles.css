@@ -143,3 +143,9 @@ button:disabled { cursor: default; }
 .mine-banner { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-bottom: 1rem; padding: .6rem .9rem; border-radius: .75rem;
   background: #f0fdfa; border: 1px solid #99f6e4; color: #115e59; font-size: .875rem; }
 
+/* Familie / Ale mele — la începutul rândului de tab-uri, vizibil și pe telefon */
+.scope-switch { display: inline-flex; flex-shrink: 0; padding: .2rem; gap: .15rem; margin: .3rem .35rem .3rem 0; border-radius: 999px; background: #e2e8f0; }
+.scope-switch button { padding: .3rem .7rem; border-radius: 999px; font-size: .8rem; font-weight: 600; color: #475569; white-space: nowrap; cursor: pointer; }
+.scope-switch button:hover { color: #0f172a; }
+.scope-switch .scope-on { background: #0f766e; color: #fff; box-shadow: 0 1px 2px rgba(15, 23, 42, .15); }
+
