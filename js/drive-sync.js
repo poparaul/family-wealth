@@ -48,13 +48,14 @@
   }
 
   /** Obține un access_token. Trebuie apelat dintr-un gest al utilizatorului (click), altfel popup-ul e blocat. */
-  async function connect(clientId) {
+  async function connect(clientId, opts = {}) {
     if (!clientId) throw new DriveError('Lipsește Google OAuth Client ID (vezi Setări).');
     await loadGis();
     return new Promise((resolve, reject) => {
       const client = google.accounts.oauth2.initTokenClient({
         client_id: clientId,
         scope: SCOPE,
+        hint: opts.hint || undefined, // contul ales anterior (nu cel implicit al browserului)
         callback: (resp) => {
           if (resp.error) return reject(new DriveError(resp.error_description || resp.error));
           if (!google.accounts.oauth2.hasGrantedAllScopes(resp, SCOPE)) {
@@ -72,7 +73,7 @@
           reject(new DriveError(msg));
         }
       });
-      client.requestAccessToken({ prompt: '' });
+      client.requestAccessToken({ prompt: opts.selectAccount ? 'select_account' : '' });
     });
   }
 
@@ -90,6 +91,13 @@
       throw new DriveError('Google Drive: ' + msg, res.status);
     }
     return res;
+  }
+
+  /** Emailul contului Google conectat (Drive about.get funcționează cu scope-ul drive.appdata). */
+  async function accountEmail() {
+    const res = await api(`${API}/about?fields=user(emailAddress)`);
+    const j = await res.json();
+    return (j.user && j.user.emailAddress) || null;
   }
 
   async function findFile() {
@@ -170,11 +178,12 @@
   const isValidPayload = (d) => d && typeof d === 'object' && d.metadata && Array.isArray(d.family_members);
 
   /** Reconciliere: versiunea cu last_updated mai nou câștigă. */
-  const sync = (local) => serialize(async () => {
+  const sync = (local, opts = {}) => serialize(async () => {
     const f = await findFile();
     if (!f) { await create(await encodeOut(local)); return { action: 'pushed' }; }
     const remote = await decodeIn(await download(f.id));
     if (!isValidPayload(remote)) { await update(f.id, await encodeOut(local)); return { action: 'pushed' }; }
+    if (opts.preferRemote) return { action: 'pulled', data: remote }; // cont nou/schimbat: Drive-ul e sursa de adevăr
     const lt = Date.parse(local && local.metadata && local.metadata.last_updated) || 0;
     const rt = Date.parse(remote.metadata.last_updated) || 0;
     if (rt > lt) return { action: 'pulled', data: remote };
@@ -194,7 +203,7 @@
   global.DriveSync = {
     FILE_NAME, SCOPE,
     preload: () => loadGis().catch(() => {}),
-    connect, hasValidToken, sync, push, disconnect,
+    connect, hasValidToken, sync, push, disconnect, accountEmail,
     getFileId: () => fileId
   };
 })(window);

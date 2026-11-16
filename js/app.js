@@ -314,7 +314,7 @@
     }
   }
 
-  async function connectDrive() {
+  async function connectDrive(opts = {}) {
     if (!clientId()) {
       toast('Introdu întâi Google OAuth Client ID.', 'error');
       if (isAdmin()) { state.view = 'settings'; render(); }
@@ -323,26 +323,35 @@
     if (!navigator.onLine) { toast('Ești offline. Conectarea la Drive necesită internet.', 'error'); return; }
     setSync('syncing', 'Autentificare…');
     try {
-      await DriveSync.connect(clientId());
-      settings.driveConnected = true; saveSettings();
-      await runSync();
+      const prevEmail = settings.driveEmail || null;
+      // Fără cont ales anterior (sau la „Schimbă contul”) → lista de conturi Google; altfel contul ținut minte.
+      await DriveSync.connect(clientId(), { selectAccount: !!opts.selectAccount || !prevEmail, hint: opts.selectAccount ? null : prevEmail });
+      let email = null;
+      try { email = await DriveSync.accountEmail(); } catch (e) { /* nu e esențial */ }
+      const switched = !prevEmail || (!!email && email !== prevEmail);
+      if (email) settings.driveEmail = email;
+      settings.driveConnected = true;
+      if (switched) settings.lastSync = null;
+      saveSettings();
+      // Cont nou pe acest dispozitiv: preia datele din Drive-ul contului, nu le suprascrie cu cele locale.
+      await runSync({ preferRemote: switched });
     } catch (e) {
       setSync(settings.driveConnected ? 'auth' : 'off', e.message);
       toast(e.message, 'error');
     }
   }
 
-  async function runSync() {
+  async function runSync(opts = {}) {
     if (!DriveSync.hasValidToken()) return connectDrive();
     if (settings.allowPlainPush) { pendingPush = true; return pushNow(); } // criptarea tocmai a fost dezactivată
     setSync('syncing');
     try {
-      const res = await DriveSync.sync(D());
+      const res = await DriveSync.sync(D(), { preferRemote: !!opts.preferRemote });
       if (res.action === 'pulled') {
         state.data = normalizeData(res.data);
         saveData(state.data);
         if (!currentMember()) state.profileId = null;
-        toast('Date actualizate din Google Drive.', 'success');
+        toast(opts.preferRemote && settings.driveEmail ? `Date preluate din Google Drive (${settings.driveEmail}).` : 'Date actualizate din Google Drive.', 'success');
       } else if (res.action === 'pushed') {
         toast('Datele locale au fost salvate în Google Drive.', 'success');
       }
@@ -351,7 +360,7 @@
       setSync('synced');
       render();
     } catch (e) {
-      if (e.code === 'NEED_PASSWORD') { setSync('auth', 'Datele din Drive sunt criptate'); askVaultPassword(e.envelope, runSync); return; }
+      if (e.code === 'NEED_PASSWORD') { setSync('auth', 'Datele din Drive sunt criptate'); askVaultPassword(e.envelope, () => runSync(opts)); return; }
       setSync(e.status === 401 ? 'auth' : 'error', e.message);
       toast(e.message, 'error');
     }
@@ -502,7 +511,7 @@
 
   function disconnectDrive() {
     DriveSync.disconnect();
-    settings.driveConnected = false; settings.lastSync = null; saveSettings();
+    settings.driveConnected = false; settings.lastSync = null; settings.driveEmail = null; saveSettings();
     pendingPush = false;
     setSync('off');
     render();
@@ -1655,7 +1664,7 @@
     const s = state.sync.status;
     const connected = settings.driveConnected;
     const line = !connected ? '<span class="badge bg-slate-100 text-slate-600">Neconectat</span>'
-      : DriveSync.hasValidToken() ? '<span class="badge bg-emerald-100 text-emerald-800">Conectat</span>'
+      : DriveSync.hasValidToken() ? `<span class="badge bg-emerald-100 text-emerald-800">Conectat${settings.driveEmail ? ` ca ${esc(settings.driveEmail)}` : ''}</span>`
       : '<span class="badge bg-amber-100 text-amber-800">Sesiune expirată — reconectează</span>';
     return `<div class="flex flex-wrap items-center gap-2">${line}
       ${settings.lastSync ? `<span class="text-sm text-slate-500">Ultima sincronizare: ${new Date(settings.lastSync).toLocaleString('ro-RO')}</span>` : ''}
@@ -1676,7 +1685,7 @@
         </form>
         <div class="flex flex-wrap gap-2 mt-3">
           <button data-action="connectDrive" class="btn-primary">${settings.driveConnected ? '🔄 Reconectează & sincronizează' : '🔗 Conectează Google Drive'}</button>
-          ${settings.driveConnected ? `<button data-action="syncNow" class="btn-secondary">Sincronizează acum</button><button data-action="disconnectDrive" class="btn-ghost text-rose-600">Deconectează</button>` : ''}
+          ${settings.driveConnected ? `<button data-action="syncNow" class="btn-secondary">Sincronizează acum</button><button data-action="switchDriveAccount" class="btn-secondary">👤 Schimbă contul Google</button><button data-action="disconnectDrive" class="btn-ghost text-rose-600">Deconectează</button>` : ''}
         </div>
         <details class="mt-4 text-sm text-slate-600"><summary class="cursor-pointer font-medium">Cum obțin un Client ID?</summary>
           <ol class="list-decimal pl-5 mt-2 space-y-1">
@@ -1953,6 +1962,11 @@
       updateSplitTotal();
     },
     connectDrive: () => connectDrive(),
+    switchDriveAccount: async () => {
+      if (await confirmDialog('Schimbă contul Google', 'Alegi alt cont Google. Datele de pe acest dispozitiv vor fi înlocuite cu cele din Drive-ul contului ales (dacă există acolo).', 'Alege contul')) {
+        connectDrive({ selectAccount: true });
+      }
+    },
     syncNow: () => runSync(),
     disconnectDrive: async () => { if (await confirmDialog('Deconectare Google Drive', 'Se deconectează doar acest dispozitiv. Datele rămân aici și în Drive, iar celelalte dispozitive rămân conectate.', 'Deconectează')) disconnectDrive(); },
     exportJson: () => exportJson(false),
