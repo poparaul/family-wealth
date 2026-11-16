@@ -137,6 +137,18 @@
   function saveJSON(key, val) {
     try { localStorage.setItem(key, JSON.stringify(val)); return true; } catch (e) { toast('Nu s-a putut salva local (stocare plină sau blocată).', 'error'); return false; }
   }
+  // Salvează datele local: criptate (anvelopă vault) dacă parola familiei e activă, altfel JSON simplu.
+  let saveChain = Promise.resolve();
+  function saveData(d) {
+    if (!FWVault.enabled()) { saveJSON(LS.DATA, d); return saveChain; }
+    const snapshot = JSON.stringify(d); // instantaneu acum; criptarea e asincronă
+    saveChain = saveChain
+      .then(async () => { if (FWVault.enabled()) saveJSON(LS.DATA, await FWVault.encrypt(JSON.parse(snapshot))); })
+      .catch(() => toast('Nu s-au putut cripta datele local.', 'error'));
+    return saveChain;
+  }
+  const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
   function ssGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
   function ssSet(k, v) { try { v == null ? sessionStorage.removeItem(k) : sessionStorage.setItem(k, v); } catch (e) { /* ignore */ } }
 
@@ -232,11 +244,8 @@
     return changed;
   }
 
-  function loadData() {
-    const stored = loadJSON(LS.DATA, null);
-    if (stored) return normalizeData(stored);
+  function demoData() {
     const demo = normalizeData(clone(DEMO_DATA));
-    saveJSON(LS.DATA, demo);
     setTimeout(() => toast('Au fost încărcate date demo. Le poți șterge din Setări → Date.', 'info', 6000), 600);
     return demo;
   }
@@ -244,7 +253,7 @@
   /** Salvare locală + auto-save Drive. */
   function persist() {
     M().last_updated = new Date().toISOString();
-    saveJSON(LS.DATA, D());
+    saveData(D());
     scheduleDrivePush();
   }
 
@@ -294,11 +303,13 @@
     if (!DriveSync.hasValidToken()) { setSync('auth', 'Modificări nesincronizate'); return; }
     setSync('syncing');
     try {
-      await DriveSync.push(D());
+      await DriveSync.push(D(), { allowPlain: !!settings.allowPlainPush });
       pendingPush = false;
+      if (settings.allowPlainPush) settings.allowPlainPush = false;
       settings.lastSync = new Date().toISOString(); saveSettings();
       setSync('synced');
     } catch (e) {
+      if (e.code === 'NEED_PASSWORD') { setSync('auth', 'Datele din Drive sunt criptate'); askVaultPassword(e.envelope, pushNow); return; }
       setSync(e.status === 401 ? 'auth' : 'error', e.message);
     }
   }
@@ -323,12 +334,13 @@
 
   async function runSync() {
     if (!DriveSync.hasValidToken()) return connectDrive();
+    if (settings.allowPlainPush) { pendingPush = true; return pushNow(); } // criptarea tocmai a fost dezactivată
     setSync('syncing');
     try {
       const res = await DriveSync.sync(D());
       if (res.action === 'pulled') {
         state.data = normalizeData(res.data);
-        saveJSON(LS.DATA, state.data);
+        saveData(state.data);
         if (!currentMember()) state.profileId = null;
         toast('Date actualizate din Google Drive.', 'success');
       } else if (res.action === 'pushed') {
@@ -339,9 +351,153 @@
       setSync('synced');
       render();
     } catch (e) {
+      if (e.code === 'NEED_PASSWORD') { setSync('auth', 'Datele din Drive sunt criptate'); askVaultPassword(e.envelope, runSync); return; }
       setSync(e.status === 401 ? 'auth' : 'error', e.message);
       toast(e.message, 'error');
     }
+  }
+
+  /* ---------- Parola familiei (criptare) ---------- */
+  // Cerută când datele din Drive sunt criptate, iar acest dispozitiv încă nu are parola (sau a fost schimbată).
+  function askVaultPassword(env, after) {
+    if (state.modal) return;
+    openModal({
+      title: '🔒 Parola familiei',
+      body: `<p class="text-sm text-slate-600 mb-3">Datele din Google Drive sunt criptate. Introdu parola familiei ca să le folosești pe acest dispozitiv.</p>
+        <input type="text" name="username" value="familie" autocomplete="username" class="hidden" tabindex="-1" aria-hidden="true">
+        <input name="vaultpw" type="password" autocomplete="current-password" class="input" aria-label="Parola familiei" required>`,
+      submitLabel: 'Deblochează',
+      onSubmit: async (form) => {
+        const btn = form.querySelector('[type=submit]');
+        btn.disabled = true;
+        const data = await FWVault.unlock(form.vaultpw.value, env);
+        if (!data) {
+          failedAttempts++; await delay(Math.min(5000, 400 * failedAttempts));
+          btn.disabled = false; showFormErrors(['Parolă greșită.']); form.vaultpw.value = ''; form.vaultpw.focus();
+          return false;
+        }
+        failedAttempts = 0;
+        await saveData(D());
+        toast('Parola familiei a fost acceptată. Datele sunt criptate și pe acest dispozitiv.', 'success');
+        if (after) setTimeout(after, 0);
+        return true;
+      }
+    });
+  }
+
+  // Parola familiei: minim 8 caractere, cel puțin o literă și o cifră.
+  const VAULT_MIN = 8;
+  const vaultPasswordErrors = (pw) => {
+    const e = [];
+    if (pw.length < VAULT_MIN) e.push(`Parola trebuie să aibă minim ${VAULT_MIN} caractere.`);
+    if (!/\p{L}/u.test(pw) || !/\d/.test(pw)) e.push('Parola trebuie să conțină litere și cifre.');
+    return e;
+  };
+
+  function vaultEnableForm() {
+    if (!FWVault.supported()) { toast('Browserul nu suportă criptarea (este nevoie de HTTPS).', 'error'); return; }
+    openModal({
+      title: '🔐 Activează criptarea',
+      body: `<div class="space-y-3 text-sm">
+        <p class="text-slate-600">Parola se cere la deschiderea aplicației pe fiecare dispozitiv (o dată pe sesiune). Folosiți aceeași parolă în toată familia.</p>
+        <input type="text" name="username" value="familie" autocomplete="username" class="hidden" tabindex="-1" aria-hidden="true">
+        <label class="field"><span class="field-label">Parola familiei *</span><input name="pw1" type="password" autocomplete="new-password" minlength="8" class="input" required>
+          <span class="field-hint">Minim 8 caractere, cu litere și cifre. Evită nume și ani din familie.</span></label>
+        <label class="field"><span class="field-label">Confirmă parola *</span><input name="pw2" type="password" autocomplete="new-password" class="input" required></label>
+        <label class="flex items-start gap-2 alert-red"><input name="ack" type="checkbox" class="w-4 h-4 mt-0.5 accent-rose-600">
+          <span>Am notat parola într-un loc sigur. Înțeleg că <strong>fără ea datele nu mai pot fi recuperate</strong>.</span></label>
+      </div>`,
+      submitLabel: 'Activează criptarea',
+      onSubmit: async (form) => {
+        const errors = [];
+        errors.push(...vaultPasswordErrors(form.pw1.value));
+        if (form.pw1.value !== form.pw2.value) errors.push('Parolele nu coincid.');
+        if (!form.ack.checked) errors.push('Confirmă că ai notat parola.');
+        if (errors.length) { showFormErrors(errors); return false; }
+        const btn = form.querySelector('[type=submit]'); btn.disabled = true; btn.textContent = 'Se criptează…';
+        await FWVault.setup(form.pw1.value);
+        persist();
+        toast(settings.driveConnected ? 'Criptare activată. Datele se criptează și în Google Drive.' : 'Criptare activată.', 'success', 5000);
+        setTimeout(render, 0);
+        return true;
+      }
+    });
+  }
+
+  function vaultChangeForm() {
+    openModal({
+      title: 'Schimbă parola familiei',
+      body: `<div class="space-y-3 text-sm">
+        <input type="text" name="username" value="familie" autocomplete="username" class="hidden" tabindex="-1" aria-hidden="true">
+        <label class="field"><span class="field-label">Parola actuală *</span><input name="cur" type="password" autocomplete="current-password" class="input" required></label>
+        <label class="field"><span class="field-label">Parola nouă *</span><input name="pw1" type="password" autocomplete="new-password" minlength="8" class="input" required><span class="field-hint">Minim 8 caractere, cu litere și cifre.</span></label>
+        <label class="field"><span class="field-label">Confirmă parola nouă *</span><input name="pw2" type="password" autocomplete="new-password" class="input" required></label>
+        <p class="text-slate-500">Pe celelalte dispozitive se va cere parola nouă la următoarea sincronizare. Backupurile criptate vechi rămân cu parola veche.</p>
+      </div>`,
+      submitLabel: 'Schimbă parola',
+      onSubmit: async (form) => {
+        const errors = [];
+        errors.push(...vaultPasswordErrors(form.pw1.value));
+        if (form.pw1.value !== form.pw2.value) errors.push('Parolele noi nu coincid.');
+        if (errors.length) { showFormErrors(errors); return false; }
+        const btn = form.querySelector('[type=submit]'); btn.disabled = true;
+        if (!(await FWVault.verifyPassword(form.cur.value))) { btn.disabled = false; showFormErrors(['Parola actuală este greșită.']); return false; }
+        await FWVault.setup(form.pw1.value);
+        persist();
+        toast('Parola familiei a fost schimbată.', 'success');
+        return true;
+      }
+    });
+  }
+
+  function vaultDisableForm() {
+    openModal({
+      title: 'Dezactivează criptarea',
+      danger: true,
+      body: `<div class="space-y-3 text-sm">
+        <p class="alert-red">Datele vor fi salvate <strong>necriptat</strong> pe acest dispozitiv și în Google Drive.</p>
+        <input type="text" name="username" value="familie" autocomplete="username" class="hidden" tabindex="-1" aria-hidden="true">
+        <label class="field"><span class="field-label">Parola familiei *</span><input name="cur" type="password" autocomplete="current-password" class="input" required></label>
+      </div>`,
+      submitLabel: 'Dezactivează',
+      onSubmit: async (form) => {
+        const btn = form.querySelector('[type=submit]'); btn.disabled = true;
+        if (!(await FWVault.verifyPassword(form.cur.value))) { btn.disabled = false; showFormErrors(['Parolă greșită.']); return false; }
+        await saveChain;
+        FWVault.lock();
+        if (settings.driveConnected) { settings.allowPlainPush = true; saveSettings(); }
+        persist();
+        toast('Criptarea a fost dezactivată.', 'success');
+        setTimeout(render, 0);
+        return true;
+      }
+    });
+  }
+
+  async function lockNow() {
+    await saveChain;
+    FWVault.lock();
+    ssSet(SS_UNLOCK, null);
+    location.reload();
+  }
+
+  function renderLockScreen(error) {
+    return `<div class="min-h-screen flex items-center justify-center p-4">
+      <form data-form="unlock" class="card w-full max-w-sm text-center p-6">
+        <div class="text-5xl">🔒</div>
+        <h1 class="text-xl font-bold mt-3">Patrimoniu Familial</h1>
+        <p class="text-sm text-slate-500 mt-1">Datele sunt criptate. Introdu parola familiei.</p>
+        <input type="text" name="username" value="familie" autocomplete="username" class="hidden" tabindex="-1" aria-hidden="true">
+        <input name="password" type="password" autocomplete="current-password" class="input mt-4 text-center" aria-label="Parola familiei" required>
+        <p id="unlock-error" class="text-sm text-rose-600 mt-2 min-h-[1.25rem]">${error ? esc(error) : ''}</p>
+        <button class="btn-primary w-full mt-2">Deblochează</button>
+      </form></div>`;
+  }
+
+  function showLockScreen(env, error) {
+    state.lockedEnvelope = env;
+    $('#app').innerHTML = renderLockScreen(error);
+    setTimeout(() => { const i = $('[data-form="unlock"] [name="password"]'); if (i) i.focus(); }, 30);
   }
 
   function disconnectDrive() {
@@ -857,6 +1013,7 @@
           <p class="text-xs text-slate-500 truncate">${esc(me.name)} · ${ROLE_LABELS[me.role]}</p>
         </div>
         <div id="sync-badge">${syncBadgeHtml()}</div>
+        ${FWVault.enabled() ? '<button data-action="lockNow" class="btn-ghost btn-sm" title="Blochează (cere parola familiei)" aria-label="Blochează">🔒</button>' : ''}
         <button data-action="ownPassword" class="btn-ghost btn-sm" title="${me.auth ? 'Schimbă parola' : 'Setează o parolă'}" aria-label="Parola mea">🔑</button>
         <button data-action="switchProfile" class="btn-secondary btn-sm" title="Schimbă profilul">${avatar(me, 'w-6 h-6 text-xs')}<span class="hidden sm:inline">Schimbă</span></button>
       </div>
@@ -1553,10 +1710,25 @@
       </section>
 
       <section class="card">
+        <h3 class="font-semibold">🔐 Criptare date (parola familiei)</h3>
+        ${FWVault.enabled() ? `<p class="text-sm mt-2"><span class="badge bg-emerald-100 text-emerald-800">✓ Activă</span>
+            Datele sunt criptate (AES-256) pe acest dispozitiv, în Google Drive și în backupurile exportate.</p>
+          <div class="flex flex-wrap gap-2 mt-3">
+            <button data-action="lockNow" class="btn-secondary">🔒 Blochează acum</button>
+            <button data-action="vaultChange" class="btn-secondary">Schimbă parola</button>
+            <button data-action="vaultDisable" class="btn-ghost text-rose-600">Dezactivează</button>
+          </div>`
+        : `<p class="text-sm text-slate-500 mt-1">Criptează datele cu o parolă comună a familiei. Fără ea nimeni nu le poate citi — nici din Google Drive, nici de pe un laptop deblocat.</p>
+          <p class="text-sm text-rose-700 mt-2">⚠️ Dacă uitați parola, datele nu mai pot fi recuperate.</p>
+          <button data-action="vaultEnable" class="btn-primary mt-3">🔐 Activează criptarea</button>`}
+      </section>
+
+      <section class="card">
         <h3 class="font-semibold">🗂 Date</h3>
         <p class="text-sm text-slate-500 mt-1">Backup manual în format JSON (aceeași schemă ca în Google Drive).</p>
         <div class="flex flex-wrap gap-2 mt-3">
-          <button data-action="exportJson" class="btn-secondary">⬇ Exportă JSON</button>
+          <button data-action="exportJson" class="btn-secondary">⬇ Exportă JSON${FWVault.enabled() ? ' (criptat)' : ''}</button>
+          ${FWVault.enabled() ? '<button data-action="exportPlain" class="btn-ghost">⬇ Exportă necriptat</button>' : ''}
           <button data-action="importJson" class="btn-secondary">⬆ Importă JSON</button>
           <input id="import-file" type="file" accept="application/json,.json" class="hidden">
         </div>
@@ -1694,11 +1866,13 @@
   /* ======================================================================
      ACȚIUNI
      ====================================================================== */
-  function exportJson() {
-    const blob = new Blob([JSON.stringify(D(), null, 2)], { type: 'application/json' });
+  async function exportJson(plain) {
+    const encrypted = FWVault.enabled() && !plain;
+    const payload = encrypted ? await FWVault.encrypt(D()) : D();
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `family_wealth_data_${Calc.todayISO()}.json`;
+    a.download = `family_wealth_data_${Calc.todayISO()}${encrypted ? '_criptat' : ''}.json`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
@@ -1781,7 +1955,14 @@
     connectDrive: () => connectDrive(),
     syncNow: () => runSync(),
     disconnectDrive: async () => { if (await confirmDialog('Deconectare Google Drive', 'Se deconectează doar acest dispozitiv. Datele rămân aici și în Drive, iar celelalte dispozitive rămân conectate.', 'Deconectează')) disconnectDrive(); },
-    exportJson,
+    exportJson: () => exportJson(false),
+    exportPlain: async () => {
+      if (await confirmDialog('Export necriptat', 'Fișierul va conține toate datele în clar. Șterge-l după ce l-ai folosit.', 'Exportă necriptat')) exportJson(true);
+    },
+    lockNow: () => lockNow(),
+    vaultEnable: () => vaultEnableForm(),
+    vaultChange: () => vaultChangeForm(),
+    vaultDisable: () => vaultDisableForm(),
     importJson: () => $('#import-file').click(),
     loadDemo: async () => {
       if (!(await confirmDialog('Încarcă date demo', 'Datele actuale de pe acest dispozitiv vor fi înlocuite cu cele demo (și sincronizate în Drive dacă e conectat).', 'Încarcă demo'))) return;
@@ -1830,6 +2011,21 @@
   };
 
   const formHandlers = {
+    unlock: async (form) => {
+      const btn = form.querySelector('button'); const err = $('#unlock-error');
+      btn.disabled = true; btn.textContent = 'Se verifică…'; err.textContent = '';
+      let data = null;
+      try { data = await FWVault.unlock(form.password.value, state.lockedEnvelope); } catch (e) { err.textContent = 'Browserul nu poate decripta datele (este nevoie de HTTPS).'; }
+      if (!data) {
+        failedAttempts++; await delay(Math.min(5000, 400 * failedAttempts));
+        btn.disabled = false; btn.textContent = 'Deblochează';
+        if (!err.textContent) err.textContent = 'Parolă greșită.';
+        form.password.value = ''; form.password.focus();
+        return;
+      }
+      failedAttempts = 0; state.lockedEnvelope = null;
+      start(normalizeData(data));
+    },
     guide: (form) => commit((d) => { d.emergency_guide.instructions = form.instructions.value; }, 'Instrucțiuni salvate.'),
     clientId: (form) => {
       settings.clientId = form.clientId.value.trim(); saveSettings();
@@ -1896,8 +2092,25 @@
       reader.onload = async () => {
         let parsed;
         try { parsed = JSON.parse(reader.result); } catch (err) { toast('Fișierul nu este un JSON valid.', 'error'); return; }
-        if (!parsed || !parsed.metadata || !Array.isArray(parsed.family_members)) { toast('Structura fișierului nu corespunde schemei aplicației.', 'error'); return; }
-        if (await confirmDialog('Importă date', `Datele actuale vor fi înlocuite cu cele din „${file.name}”.`, 'Importă')) replaceData(parsed, 'Date importate.');
+        const finish = async (data) => {
+          if (!data || !data.metadata || !Array.isArray(data.family_members)) { toast('Structura fișierului nu corespunde schemei aplicației.', 'error'); return; }
+          if (await confirmDialog('Importă date', `Datele actuale vor fi înlocuite cu cele din „${file.name}”.`, 'Importă')) replaceData(data, 'Date importate.');
+        };
+        if (!FWVault.isEnvelope(parsed)) { finish(parsed); return; }
+        // Backup criptat: încearcă parola curentă, altfel cere parola acelui backup (fără s-o adopte)
+        try { finish(await FWVault.decrypt(parsed)); return; } catch (err) { /* altă parolă */ }
+        openModal({
+          title: '🔒 Backup criptat',
+          body: `<p class="text-sm text-slate-600 mb-3">„${esc(file.name)}” e criptat cu o altă parolă. Introdu parola cu care a fost exportat.</p>
+            <input name="bkpw" type="password" autocomplete="off" class="input" aria-label="Parola backupului" required>`,
+          submitLabel: 'Deschide',
+          onSubmit: async (form) => {
+            const data = await FWVault.open(form.bkpw.value, parsed);
+            if (!data) { showFormErrors(['Parolă greșită.']); return false; }
+            setTimeout(() => finish(data), 0);
+            return true;
+          }
+        });
       };
       reader.readAsText(file);
     }
@@ -1981,22 +2194,43 @@
   window.addEventListener('offline', () => { if (settings.driveConnected) setSync('offline'); });
   window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); state.installPrompt = e; if (state.view === 'settings') render(); });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && state.data && applyRollovers(D())) { saveJSON(LS.DATA, D()); render(); }
-    if (document.visibilityState === 'visible' && settings.driveConnected && navigator.onLine && !pendingPush && !state.modal) {
+    if (document.visibilityState === 'visible' && state.data && applyRollovers(D())) { saveData(D()); render(); }
+    if (document.visibilityState === 'visible' && state.data && settings.driveConnected && navigator.onLine && !pendingPush && !state.modal) {
       if (DriveSync.hasValidToken()) runSync(); else setSync('auth', 'Atinge pentru a sincroniza cu Google Drive');
     }
   });
   // Sincronizare între tab-uri deschise pe același dispozitiv
   window.addEventListener('storage', (e) => {
-    if (e.key === LS.DATA && e.newValue) { try { state.data = normalizeData(JSON.parse(e.newValue)); render(); } catch (err) { /* ignore */ } }
+    if (e.key !== LS.DATA || !e.newValue || !state.data) return;
+    try {
+      const v = JSON.parse(e.newValue);
+      if (FWVault.isEnvelope(v)) { if (FWVault.enabled()) FWVault.decrypt(v).then((d) => { state.data = normalizeData(d); render(); }).catch(() => {}); }
+      else if (!FWVault.enabled()) { state.data = normalizeData(v); render(); }
+    } catch (err) { /* ignore */ }
   });
 
   /* ======================================================================
      INIT
      ====================================================================== */
-  function init() {
-    state.data = loadData();
-    saveJSON(LS.DATA, state.data);
+  async function init() {
+    if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+      navigator.serviceWorker.register('sw.js').catch((err) => console.warn('SW:', err));
+    }
+    if (clientId() && navigator.onLine) DriveSync.preload();
+    const stored = loadJSON(LS.DATA, null);
+    if (FWVault.isEnvelope(stored)) {
+      let data = null;
+      if (await FWVault.restoreSession()) { try { data = await FWVault.decrypt(stored); } catch (e) { FWVault.lock(); } }
+      if (!data) { showLockScreen(stored); return; }
+      start(normalizeData(data));
+      return;
+    }
+    start(stored ? normalizeData(stored) : demoData());
+  }
+
+  function start(data) {
+    state.data = data;
+    saveData(state.data);
     let pid = null;
     try { pid = localStorage.getItem(LS.PROFILE); } catch (e) { /* ignore */ }
     const m = pid && member(pid);
@@ -2007,12 +2241,7 @@
       if (navigator.onLine && DriveSync.hasValidToken()) setTimeout(runSync, 300);
       else setSync(navigator.onLine ? 'auth' : 'offline', 'Atinge pentru a sincroniza cu Google Drive');
     }
-    if (clientId() && navigator.onLine) DriveSync.preload();
     render();
-
-    if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-      navigator.serviceWorker.register('sw.js').catch((err) => console.warn('SW:', err));
-    }
   }
 
   init();

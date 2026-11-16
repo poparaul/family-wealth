@@ -1,12 +1,12 @@
 /* sw.js — funcționare 100% offline după prima încărcare */
-const CACHE = 'fw-pwa-v5';
+const CACHE = 'fw-pwa-v6';
 const SHELL = [
-  './', './index.html', './manifest.json', './css/styles.css',
-  './js/app.js', './js/drive-sync.js', './js/calculators.js',
+  './', './index.html', './manifest.json', './css/styles.css', './css/tailwind.css',
+  './js/app.js', './js/vault.js', './js/drive-sync.js', './js/calculators.js',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'
 ];
 // Resurse externe versionate (cache-first). API-urile Google NU se cache-uiesc.
-const CDN_HOSTS = ['cdn.tailwindcss.com'];
+const CDN_HOSTS = []; // Tailwind e acum generat local (css/tailwind.css)
 const NEVER_CACHE = ['googleapis.com', 'accounts.google.com', 'gstatic.com'];
 
 self.addEventListener('install', (e) => {

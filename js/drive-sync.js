@@ -137,32 +137,48 @@
     return p;
   }
 
-  async function pushInner(data) {
+  /* Criptare (vault.js): ce pleacă spre Drive e criptat dacă parola familiei e activă; ce vine se decriptează. */
+  const V = () => global.FWVault;
+  const isEnc = (x) => !!(V() && V().isEnvelope(x));
+  const encodeOut = async (data) => (V() && V().enabled() ? V().encrypt(data) : data);
+  async function decodeIn(raw) {
+    if (!isEnc(raw)) return raw;
+    return V().decrypt(raw); // aruncă NEED_PASSWORD dacă nu avem parola potrivită
+  }
+
+  async function pushInner(data, opts = {}) {
     let id = fileId;
     if (!id) { const f = await findFile(); id = f && f.id; }
-    if (!id) { await create(data); return; }
+    // Un dispozitiv fără parolă nu are voie să suprascrie cu date necriptate un fișier criptat.
+    if (id && !(V() && V().enabled()) && !opts.allowPlain) {
+      let remote = null;
+      try { remote = await download(id); } catch (e) { if (e.status !== 404) throw e; }
+      if (isEnc(remote)) await V().decrypt(remote); // → NEED_PASSWORD
+    }
+    const body = await encodeOut(data);
+    if (!id) { await create(body); return; }
     try {
-      await update(id, data);
+      await update(id, body);
     } catch (e) {
-      if (e.status === 404) { setFileId(null); await create(data); } else { throw e; }
+      if (e.status === 404) { setFileId(null); await create(body); } else { throw e; }
     }
   }
 
   /** Auto-save: PATCH dacă fișierul există, altfel POST. */
-  const push = (data) => serialize(() => pushInner(data));
+  const push = (data, opts) => serialize(() => pushInner(data, opts));
 
   const isValidPayload = (d) => d && typeof d === 'object' && d.metadata && Array.isArray(d.family_members);
 
   /** Reconciliere: versiunea cu last_updated mai nou câștigă. */
   const sync = (local) => serialize(async () => {
     const f = await findFile();
-    if (!f) { await create(local); return { action: 'pushed' }; }
-    const remote = await download(f.id);
-    if (!isValidPayload(remote)) { await update(f.id, local); return { action: 'pushed' }; }
+    if (!f) { await create(await encodeOut(local)); return { action: 'pushed' }; }
+    const remote = await decodeIn(await download(f.id));
+    if (!isValidPayload(remote)) { await update(f.id, await encodeOut(local)); return { action: 'pushed' }; }
     const lt = Date.parse(local && local.metadata && local.metadata.last_updated) || 0;
     const rt = Date.parse(remote.metadata.last_updated) || 0;
     if (rt > lt) return { action: 'pulled', data: remote };
-    if (lt > rt) { await update(f.id, local); return { action: 'pushed' }; }
+    if (lt > rt) { await update(f.id, await encodeOut(local)); return { action: 'pushed' }; }
     return { action: 'none' };
   });
 
