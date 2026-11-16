@@ -8,7 +8,7 @@
   const CONFIG = {
     // Opțional: pune aici OAuth Client ID-ul ca să nu-l introduci manual pe fiecare dispozitiv.
     // Ex: '1234567890-abc.apps.googleusercontent.com'
-    GOOGLE_CLIENT_ID: ''
+    GOOGLE_CLIENT_ID: '224663736671-oia6ij7slsdnmqpbjhibdfe4lcpp6qpl.apps.googleusercontent.com'
   };
 
   const LS = { DATA: 'fw_data', PROFILE: 'fw_profile', SETTINGS: 'fw_settings', ANALYSIS: 'fw_analysis' };
