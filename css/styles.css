@@ -135,17 +135,17 @@ button:disabled { cursor: default; }
 .pie-total { font-weight: 700; font-size: .95rem; line-height: 1.15; color: #0f172a; word-break: break-word; }
 .pie-label { font-size: .7rem; color: #64748b; margin-top: .15rem; }
 
-/* Comutator „Doar ale mele” */
-.mine-toggle { display: inline-flex; align-items: center; gap: .35rem; border-radius: 999px; padding: .35rem .75rem; font-size: .8rem; font-weight: 600;
-  border: 1px solid #cbd5e1; background: #fff; color: #334155; cursor: pointer; white-space: nowrap; }
-.mine-toggle:hover { background: #f1f5f9; }
-.mine-toggle.mine-on { background: #0f766e; border-color: #0f766e; color: #fff; }
+/* Bandă de context în modul „Ale mele” */
 .mine-banner { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-bottom: 1rem; padding: .6rem .9rem; border-radius: .75rem;
   background: #f0fdfa; border: 1px solid #99f6e4; color: #115e59; font-size: .875rem; }
 
-/* Familie / Ale mele — la începutul rândului de tab-uri, vizibil și pe telefon */
-.scope-switch { display: inline-flex; flex-shrink: 0; padding: .2rem; gap: .15rem; margin: .3rem .35rem .3rem 0; border-radius: 999px; background: #e2e8f0; }
-.scope-switch button { padding: .3rem .7rem; border-radius: 999px; font-size: .8rem; font-weight: 600; color: #475569; white-space: nowrap; cursor: pointer; }
-.scope-switch button:hover { color: #0f172a; }
-.scope-switch .scope-on { background: #0f766e; color: #fff; box-shadow: 0 1px 2px rgba(15, 23, 42, .15); }
+/* Comutator „Ale mele” (antet, administratori) */
+.mine-switch { display: inline-flex; align-items: center; gap: .4rem; padding: .3rem .55rem .3rem .35rem; border-radius: 999px; font-size: .8rem; font-weight: 600;
+  color: #334155; border: 1px solid #cbd5e1; background: #fff; white-space: nowrap; cursor: pointer; flex-shrink: 0; }
+.mine-switch:hover { background: #f8fafc; }
+.mine-track { position: relative; width: 1.9rem; height: 1.1rem; border-radius: 999px; background: #cbd5e1; transition: background .15s; flex-shrink: 0; }
+.mine-knob { position: absolute; top: .15rem; left: .15rem; width: .8rem; height: .8rem; border-radius: 999px; background: #fff; box-shadow: 0 1px 2px rgba(15, 23, 42, .3); transition: transform .15s; }
+.mine-switch.on { border-color: #0f766e; color: #0f766e; background: #f0fdfa; }
+.mine-switch.on .mine-track { background: #0f766e; }
+.mine-switch.on .mine-knob { transform: translateX(.8rem); }
 
