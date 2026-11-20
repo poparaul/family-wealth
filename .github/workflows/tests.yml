@@ -1,0 +1,22 @@
+name: Teste
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Teste (unitare + interfață în jsdom)
+        run: npm test
+      - name: css/tailwind.css e la zi cu clasele din cod
+        run: |
+          npm run build:css
+          git diff --exit-code --ignore-all-space css/tailwind.css || (echo "::error::Rulează 'npm run build:css' și fă commit la css/tailwind.css" && exit 1)

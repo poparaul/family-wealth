@@ -5,7 +5,10 @@
   const DOC_LABELS = { rca: 'RCA', rovinieta: 'Rovinietă', itp: 'ITP', casco: 'CASCO' };
 
   // Paletă categorială validată (CVD-safe), ordine fixă — culoarea urmează entitatea, nu rangul.
-  const PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
+  // Aceleași 8 nuanțe, alese separat pentru fundal deschis și întunecat (validate pentru daltonism și contrast).
+  const PALETTE_LIGHT = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
+  const PALETTE_DARK = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#0ca30c', '#9085e9', '#e66767'];
+  const PALETTE = PALETTE_LIGHT.slice();
   const OTHER_COLOR = '#8a8a86';
 
   const CATEGORIES = {
@@ -15,6 +18,13 @@
     children_savings:      { label: 'Economii copii', color: PALETTE[3] },
     vehicles:              { label: 'Vehicule',       color: PALETTE[4] }
   };
+  const CAT_SLOT = { investment_accounts: 0, grandparents_accounts: 1, real_estate: 2, children_savings: 3, vehicles: 4 };
+  /** Comută paleta (în loc) pentru tema întunecată; toate culorile derivate o urmează. */
+  function setDarkPalette(on) {
+    const src = on ? PALETTE_DARK : PALETTE_LIGHT;
+    src.forEach((c, i) => { PALETTE[i] = c; });
+    Object.keys(CAT_SLOT).forEach((k) => { CATEGORIES[k].color = PALETTE[CAT_SLOT[k]]; });
+  }
 
   const DEFAULT_BONUS = 600;
 
@@ -214,6 +224,40 @@
       .map((a) => ({ account: a, daysLate: today.getDate() - (num(a.monthly_contribution.due_day) || 1) }));
   }
 
+  /** Încasări în următoarele `months` luni: dobânzi la scadența depozitelor, cupoane anuale la titluri de stat
+   *  (Fidelis/Tezaur: data cuponului = ziua și luna scadenței) și rambursarea principalului. Sume nete. */
+  function incomeSchedule(data, from = new Date(), months = 12) {
+    const m = data.metadata || {};
+    const start = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+    const end = new Date(start); end.setMonth(end.getMonth() + months);
+    const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const inWin = (d) => !!d && d >= start && d <= end;
+    const holders = (a) => (a.splits && a.splits.length ? a.splits : a.owner_id ? [{ member_id: a.owner_id, percentage: 100 }] : []);
+    const ev = [];
+    const add = (a, col, d, amount, kind, label) => ev.push({ date: iso(d), amount, currency: a.currency, base: toBase(amount, a.currency, m), kind, label, id: a.id, col, holders: holders(a) });
+    (data.grandparents_accounts || []).forEach((a) => {
+      const d = parseDate(a.maturity_date);
+      if (num(a.interest_rate) > 0 && inWin(d)) add(a, 'grandparents_accounts', d, depositReturn(a).net, 'deposit', [a.bank_name, a.account_type].filter(Boolean).join(' — '));
+    });
+    (data.investment_accounts || []).forEach((a) => {
+      const d = parseDate(a.maturity_date);
+      const label = [a.platform, a.account_type].filter(Boolean).join(' — ');
+      if (isDeposit(a.account_type)) { if (num(a.interest_rate) > 0 && inWin(d)) add(a, 'investment_accounts', d, depositReturn(a).net, 'deposit', label); return; }
+      if (!isBond(a.account_type) || !d) return;
+      if (num(a.interest_rate) > 0) {
+        const tax = a.tax_rate == null || a.tax_rate === '' ? 0 : num(a.tax_rate); // Fidelis/Tezaur: dobânzi neimpozabile
+        const coupon = (num(a.total_value) * num(a.interest_rate) / 100) * (1 - tax / 100);
+        for (let y = start.getFullYear(); y <= end.getFullYear(); y++) {
+          const c = new Date(y, d.getMonth(), d.getDate());
+          if (c > d) break;
+          if (inWin(c)) add(a, 'investment_accounts', c, coupon, 'coupon', label);
+        }
+      }
+      if (inWin(d)) add(a, 'investment_accounts', d, num(a.total_value), 'principal', label);
+    });
+    return ev.sort((x, y) => x.date.localeCompare(y.date) || x.kind.localeCompare(y.kind));
+  }
+
   function maturityAlerts(data, today = new Date(), within = 30) {
     const invDeposits = (data.investment_accounts || []).filter((a) => isDeposit(a.account_type) && a.maturity_date)
       .map((a) => Object.assign({}, a, { bank_name: a.platform, principal_amount: a.total_value, owner_id: null }));
@@ -246,6 +290,7 @@
 
   const DEFAULT_INTEREST_TAX = 10; // impozit pe dobânzi reținut la sursă (RO); editabil pe fiecare depozit
   const isDeposit = (type) => /depozit/i.test(type || '');
+  const isBond = (type) => /titluri|fidelis|tezaur|obliga/i.test(type || '');
 
   // Randamentul unui depozit la termen: dobândă brută, impozit, dobândă netă și valoarea la scadență.
   // Perioada: data constituirii → scadență; altfel durata din tip („(6 luni)”); altfel 12 luni (estimare).
@@ -294,13 +339,13 @@
   }
 
   global.Calc = {
-    DOC_LABELS, CATEGORIES, PALETTE, OTHER_COLOR, UNALLOCATED, DEFAULT_BONUS, num,
+    DOC_LABELS, CATEGORIES, PALETTE, setDarkPalette, OTHER_COLOR, UNALLOCATED, DEFAULT_BONUS, num,
     baseCurrency, rateKnown, toBase, shareRows,
     splitsTotal, validateSplits, equalSplit,
     todayISO, monthKey, parseDate, daysUntil, alertLevel,
     assets, netWorth, memberAssets,
     vehicleAlerts, childReminders, maturityAlerts,
-    bonusProgress, vehicleAnnualCost, annualInterest, depositReturn, isDeposit, DEFAULT_INTEREST_TAX,
+    bonusProgress, vehicleAnnualCost, annualInterest, depositReturn, isDeposit, isBond, incomeSchedule, DEFAULT_INTEREST_TAX,
     formatMoney, formatDate, formatDays
   };
 })(window);

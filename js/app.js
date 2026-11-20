@@ -28,6 +28,7 @@
   const NAV_ADMIN = [
     { id: 'dashboard', label: 'Panou', icon: '📊' },
     { id: 'analysis', label: 'Analiză avere', icon: '🔎' },
+    { id: 'update', label: 'Actualizare', icon: '✏️' },
     { id: 'investments', label: 'Investiții', icon: '📈' },
     { id: 'grandparents', label: 'Bănci & Depozite', icon: '🏦' },
     { id: 'realestate', label: 'Imobiliare', icon: '🏡' },
@@ -259,7 +260,7 @@
     const d = data && typeof data === 'object' ? data : emptyData();
     d.metadata = Object.assign({ version: '1.2.0', base_currency: 'RON', exchange_rates: {} }, d.metadata || {});
     if (!d.metadata.last_updated) d.metadata.last_updated = new Date().toISOString();
-    ['family_members', 'investment_accounts', 'grandparents_accounts', 'real_estate', 'children_savings', 'vehicles']
+    ['family_members', 'investment_accounts', 'grandparents_accounts', 'real_estate', 'children_savings', 'vehicles', 'goals', 'history', 'changelog']
       .forEach((k) => { if (!Array.isArray(d[k])) d[k] = []; });
     d.emergency_guide = Object.assign({ instructions: '', trusted_contacts: [] }, d.emergency_guide || {});
     if (!Array.isArray(d.emergency_guide.trusted_contacts)) d.emergency_guide.trusted_contacts = [];
@@ -301,14 +302,80 @@
   /** Salvare locală + auto-save Drive. */
   function persist() {
     M().last_updated = new Date().toISOString();
+    updateSnapshot(D());
     saveData(D());
     scheduleDrivePush();
+  }
+
+  /* ---------- Fotografie lunară a averii (pentru graficul de evoluție) ---------- */
+  function updateSnapshot(d) {
+    const nw = Calc.netWorth(d);
+    const id = Calc.monthKey(new Date());
+    const round = (o) => Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [k, Math.round(v)]));
+    const rec = { id, total: Math.round(nw.total), byMember: round(nw.byMember), byCat: round(nw.byCat), at: new Date().toISOString() };
+    d.history = (d.history || []).filter((h) => h.id !== id).concat([rec]).sort((a, b) => a.id.localeCompare(b.id)).slice(-120);
+  }
+
+  /* ---------- Jurnal de modificări (cine, ce, când) ---------- */
+  const LOGGED = ['family_members', 'investment_accounts', 'grandparents_accounts', 'real_estate', 'children_savings', 'vehicles', 'goals'];
+  const COL_LABEL = { family_members: 'Membru', investment_accounts: 'Investiție', grandparents_accounts: 'Cont bancar', real_estate: 'Imobil',
+    children_savings: 'Cont copil', vehicles: 'Vehicul', goals: 'Obiectiv', rates: '', guide: '' };
+  const FIELD_LABEL = { total_value: 'valoare', principal_amount: 'sumă', current_balance: 'sold', estimated_value: 'valoare estimată', estimated_market_value: 'valoare',
+    interest_rate: 'dobândă', maturity_date: 'scadență', start_date: 'constituire', platform: 'platformă', bank_name: 'bancă', account_type: 'tip', notes: 'note',
+    currency: 'monedă', splits: 'împărțire', owner_id: 'titular', child_id: 'copil', name: 'nume', role: 'rol', auth: 'parolă', target_amount: 'țintă', deadline: 'termen',
+    accounts: 'conturi', tax_rate: 'impozit', title: 'denumire', maturity_value: 'valoare la scadență', iban_or_account: 'IBAN', iban: 'IBAN' };
+  const fmtVal = (v) => (v == null || v === '' ? '—' : typeof v === 'number' ? v.toLocaleString('ro-RO') : String(v).length > 30 ? String(v).slice(0, 30) + '…' : String(v));
+  function fieldChange(k, a, b) {
+    const label = FIELD_LABEL[k] || k;
+    if (k === 'auth') return b ? 'parolă setată' : 'parolă eliminată';
+    if (k === 'owner_id' || k === 'child_id') return `${label}: ${a ? memberName(a) : '—'} → ${b ? memberName(b) : '—'}`;
+    if ((a == null || typeof a !== 'object') && (b == null || typeof b !== 'object')) return `${label}: ${fmtVal(a)} → ${fmtVal(b)}`;
+    return `${label} modificat`;
+  }
+  function logLabel(c, x) {
+    if (c === 'family_members' || c === 'goals') return x.name || '';
+    if (c === 'children_savings') return `${x.account_type || 'Cont'} — ${memberName(x.child_id)}`;
+    return [itemTitle(c, x), x.account_type].filter(Boolean).join(' — ');
+  }
+  function logChanges(before, after, now) {
+    const entries = [];
+    LOGGED.forEach((c) => {
+      const B = new Map((before[c] || []).map((x) => [x.id, x])), A = new Map((after[c] || []).map((x) => [x.id, x]));
+      A.forEach((x, id) => {
+        const b = B.get(id);
+        if (!b) { entries.push({ action: 'add', collection: c, label: logLabel(c, x) }); return; }
+        const fields = [...new Set([...Object.keys(b), ...Object.keys(x)])]
+          .filter((k) => !['updated_at', 'balance_history'].includes(k) && FWMerge.stable(b[k]) !== FWMerge.stable(x[k]));
+        if (fields.length) entries.push({ action: 'edit', collection: c, label: logLabel(c, x), detail: fields.slice(0, 4).map((k) => fieldChange(k, b[k], x[k])).join('; ') });
+      });
+      B.forEach((x, id) => { if (!A.has(id)) entries.push({ action: 'delete', collection: c, label: logLabel(c, x) }); });
+    });
+    const br = before.metadata && before.metadata.exchange_rates, ar = after.metadata && after.metadata.exchange_rates;
+    if (FWMerge.stable(br) !== FWMerge.stable(ar)) entries.push({ action: 'edit', collection: 'rates', label: 'Cursuri valutare', detail: Object.entries(ar || {}).map(([k, v]) => `${k} ${v}`).join(', ') });
+    if (FWMerge.stable(before.emergency_guide) !== FWMerge.stable(after.emergency_guide)) entries.push({ action: 'edit', collection: 'guide', label: 'Ghid de urgență' });
+    if (!entries.length) return;
+    const who = currentMember();
+    const by = who ? who.name : 'Automat';
+    after.changelog = (after.changelog || []).concat(entries.map((e, i) =>
+      Object.assign({ id: `log_${Date.parse(now).toString(36)}_${i}_${Math.random().toString(36).slice(2, 6)}`, at: now, by }, e))).slice(-300);
+  }
+
+  function changelogHtml(limit = 40) {
+    const list = (D().changelog || []).slice().reverse().slice(0, limit);
+    if (!list.length) return '<p class="text-sm text-slate-500">Nicio modificare înregistrată încă.</p>';
+    const icon = { add: '➕', edit: '✏️', delete: '🗑' };
+    return `<ul class="space-y-2.5 text-sm">${list.map((e) => `<li class="flex gap-2"><span aria-hidden="true">${icon[e.action] || '•'}</span>
+      <div class="min-w-0"><p><strong>${esc(e.by)}</strong> · ${e.action === 'add' ? 'a adăugat' : e.action === 'delete' ? 'a șters' : 'a modificat'} ${esc((COL_LABEL[e.collection] || '').toLowerCase())} <span class="font-medium">${esc(e.label)}</span></p>
+        ${e.detail ? `<p class="text-xs text-slate-500 break-words">${esc(e.detail)}</p>` : ''}
+        <p class="text-xs text-slate-400">${esc(new Date(e.at).toLocaleString('ro-RO'))}</p></div></li>`).join('')}</ul>`;
   }
 
   function commit(mutator, msg) {
     const before = JSON.parse(JSON.stringify(D()));
     mutator(D());
-    FWMerge.stampChanges(before, D(), new Date().toISOString());
+    const now = new Date().toISOString();
+    FWMerge.stampChanges(before, D(), now);
+    logChanges(before, D(), now);
     persist();
     render();
     if (msg) toast(msg, 'success');
@@ -423,6 +490,7 @@
       settings.lastSync = new Date().toISOString(); saveSettings();
       setSync('synced');
       render();
+      maybeBackup().catch(() => { /* backup-ul nu e esențial */ });
     } catch (e) {
       pendingPush = true;
       if (e.code === 'NEED_PASSWORD') { setSync('auth', 'Datele din Drive sunt criptate'); askVaultPassword(e.envelope, () => runSync(opts)); return; }
@@ -679,10 +747,10 @@
         { k: 'account_type', label: 'Tip investiție / Instrumente', type: 'text', list: 'dl-inv-types', placeholder: 'Alege din listă sau scrie' },
         { k: 'total_value', label: 'Valoare totală', type: 'number', req: true, min: 0 },
         { k: 'currency', label: 'Monedă', type: 'currency', req: true },
-        { k: 'interest_rate', label: 'Dobândă anuală (%)', type: 'number', min: 0, max: 100, showIf: 'deposit' },
+        { k: 'interest_rate', label: 'Dobândă / cupon anual (%)', type: 'number', min: 0, max: 100, showIf: 'income' },
         { k: 'start_date', label: 'Data constituirii', type: 'date', showIf: 'deposit' },
-        { k: 'maturity_date', label: 'Data scadenței', type: 'date', showIf: 'deposit' },
-        { k: 'tax_rate', label: 'Impozit pe dobândă (%)', type: 'number', min: 0, max: 100, hint: 'Implicit 10% (reținut de bancă)', showIf: 'deposit' },
+        { k: 'maturity_date', label: 'Data scadenței', type: 'date', showIf: 'income', hint: 'La titluri de stat: cuponul se plătește anual la această zi' },
+        { k: 'tax_rate', label: 'Impozit pe dobândă (%)', type: 'number', min: 0, max: 100, hint: 'Depozite: implicit 10%. Fidelis / Tezaur: 0% (scutite)', showIf: 'income' },
         { k: 'maturity_value', label: 'Valoare la scadență (din contract)', type: 'number', min: 0, hint: 'Opțional — gol = calcul automat', showIf: 'deposit' },
         { type: 'preview', id: 'deposit-preview', showIf: 'deposit' },
         { k: 'notes', label: 'Note', type: 'textarea', wide: true }
@@ -745,6 +813,18 @@
         { k: 'government_bonus_tracker.bonus_amount', label: 'Valoare primă / an', type: 'number', min: 0, hint: 'Implicit 600 RON' }
       ]
     },
+    goals: {
+      singular: 'obiectiv', prefix: 'goal',
+      defaults: () => ({ name: '', target_amount: 0, currency: baseCur(), deadline: null, accounts: [], notes: '' }),
+      fields: [
+        { k: 'name', label: 'Nume obiectiv', type: 'text', req: true, wide: true, placeholder: 'Ex: Fond de urgență, Facultate Sonia' },
+        { k: 'target_amount', label: 'Sumă țintă', type: 'number', req: true, min: 0 },
+        { k: 'currency', label: 'Monedă', type: 'currency', req: true },
+        { k: 'deadline', label: 'Termen', type: 'date' },
+        { k: 'accounts', label: 'Conturi care contribuie la obiectiv', type: 'accounts', wide: true },
+        { k: 'notes', label: 'Note', type: 'textarea', wide: true }
+      ]
+    },
     vehicles: {
       singular: 'vehicul', prefix: 'veh',
       defaults: () => ({ name: '', plate_number: '', owner_id: firstByRole('admin'), estimated_market_value: 0, currency: 'RON', documents: { rca: {}, rovinieta: {}, itp: {}, casco: {} } }),
@@ -781,7 +861,8 @@
   function currencies() { return [baseCur(), ...Object.keys(M().exchange_rates || {}).filter((c) => c !== baseCur())]; }
 
   function fieldHtml(f, item) {
-    const hidden = f.showIf === 'deposit' && !Calc.isDeposit(item.account_type);
+    const hidden = f.showIf && !showMatch(f.showIf, item.account_type);
+    if (f.type === 'accounts') return accountsPickerHtml(f, item);
     const showAttr = f.showIf ? `data-show-if="${f.showIf}"` : '';
     if (f.type === 'preview') return `<div id="${f.id}" class="sm:col-span-2 ${hidden ? 'hidden' : ''}" ${showAttr}>${depositSummaryHtml(item, item.currency)}</div>`;
     if (f.type === 'section') return `<h4 class="sm:col-span-2 mt-2 pt-3 border-t border-slate-100 text-sm font-semibold text-slate-700">${esc(f.label)}</h4>`;
@@ -822,6 +903,30 @@
       ${input}${f.hint ? `<span class="field-hint">${esc(f.hint)}</span>` : ''}</label>`;
   }
 
+  // Câmpurile condiționate din formular: depozit / venit (depozit sau titluri de stat).
+  const showMatch = (kind, type) => (kind === 'deposit' ? Calc.isDeposit(type) : kind === 'income' ? Calc.isDeposit(type) || Calc.isBond(type) : true);
+
+  const holdersNames = (a) => holdersOf(a).map((h) => memberName(h.member_id)).join(', ');
+  function accountLabel(c, a) {
+    if (c === 'children_savings') return `${a.account_type || 'Cont'} — ${memberName(a.child_id)}`;
+    return `${[itemTitle(c, a), a.account_type].filter(Boolean).join(' — ')} (${holdersNames(a)})`;
+  }
+  const ACCOUNT_GROUPS = [['investment_accounts', '📈', 'total_value'], ['grandparents_accounts', '🏦', 'principal_amount'], ['children_savings', '🐷', 'current_balance']];
+  function accountBaseValue(key) {
+    const [c, id] = String(key).split(':');
+    const g = ACCOUNT_GROUPS.find((x) => x[0] === c);
+    const a = g && (D()[c] || []).find((x) => x.id === id);
+    return a ? Calc.toBase(a[g[2]], a.currency, M()) : 0;
+  }
+  function accountsPickerHtml(f, item) {
+    const sel = new Set(item[f.k] || []);
+    const rows = ACCOUNT_GROUPS.flatMap(([c, icon]) => (D()[c] || []).map((a) => `<label class="flex items-start gap-2 py-1 cursor-pointer">
+      <input type="checkbox" data-accounts value="${esc(c + ':' + a.id)}" ${sel.has(c + ':' + a.id) ? 'checked' : ''} class="w-4 h-4 mt-0.5 accent-teal-600">
+      <span>${icon} ${esc(accountLabel(c, a))}</span></label>`)).join('');
+    return `<div class="field sm:col-span-2"><span class="field-label">${esc(f.label)}</span>
+      <div class="max-h-56 overflow-y-auto rounded-lg border border-slate-200 px-3 py-2 text-sm">${rows || '<p class="text-slate-500">Nu există conturi.</p>'}</div></div>`;
+  }
+
   function depositSummaryHtml(acc, cur) {
     const r = Calc.depositReturn(acc);
     if (!r.principal || !r.rate) return `<p class="text-sm text-slate-500">Completează suma și dobânda ca să vezi cât câștigi la scadență.</p>`;
@@ -849,7 +954,7 @@
     if (root.querySelector('[data-path="principal_amount"]')) acc.principal_amount = numOrNull('principal_amount');
     else acc.total_value = numOrNull('total_value');
     const dep = Calc.isDeposit(acc.account_type);
-    root.querySelectorAll('[data-show-if="deposit"]').forEach((el) => el.classList.toggle('hidden', !dep));
+    root.querySelectorAll('[data-show-if]').forEach((el) => el.classList.toggle('hidden', !showMatch(el.dataset.showIf, acc.account_type)));
     const box = root.querySelector('#deposit-preview');
     if (box) box.innerHTML = depositSummaryHtml(acc, val('currency') || baseCur());
   }
@@ -908,6 +1013,7 @@
       onSubmit: (form) => {
         const errors = [];
         schema.fields.filter((f) => f.k).forEach((f) => {
+          if (f.type === 'accounts') { setPath(item, f.k, [...form.querySelectorAll('input[data-accounts]:checked')].map((i) => i.value)); return; }
           const el = form.querySelector(`[data-path="${f.k}"]`);
           if (!el) return;
           let v;
@@ -1033,7 +1139,8 @@
   const LEVEL_CLS = { expired: 'alert-red', red: 'alert-red', yellow: 'alert-yellow' };
   const LEVEL_BADGE = { expired: 'bg-rose-600 text-white', red: 'bg-rose-100 text-rose-800', yellow: 'bg-amber-100 text-amber-800' };
 
-  function lineChart(points, color = '#ec4899') {
+  function lineChart(points, color = '#ec4899', opts = {}) {
+    const fmtTip = opts.fmt || ((v) => money(v));
     if (!points || !points.length) return '<p class="text-sm text-slate-500">Încă nu există istoric al soldului.</p>';
     const W = 600, H = 240, P = { l: 70, r: 24, t: 16, b: 40 };
     const fmtNum = (v) => new Intl.NumberFormat('ro-RO', { notation: v >= 100000 ? 'compact' : 'standard', maximumFractionDigits: 0 }).format(v);
@@ -1054,7 +1161,7 @@
       ${ticks.map((t) => `<line x1="${P.l}" x2="${W - P.r}" y1="${y(t)}" y2="${y(t)}" stroke="#e2e8f0"/><text x="${P.l - 10}" y="${y(t) + 5}" text-anchor="end" font-size="16" fill="#64748b">${esc(fmtNum(t))}</text>`).join('')}
       <path d="${area}" fill="url(#${gid})"/>
       <path d="${line}" fill="none" stroke="${color}" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
-      ${points.map((p, i) => `<circle cx="${x(i)}" cy="${y(vals[i])}" r="4" fill="#fff" stroke="${color}" stroke-width="2"><title>${esc(Calc.formatDate(p.date))}: ${esc(money(vals[i]))}</title></circle>`).join('')}
+      ${points.map((p, i) => `<circle cx="${x(i)}" cy="${y(vals[i])}" r="4" fill="#fff" stroke="${color}" stroke-width="2"><title>${esc(Calc.formatDate(p.date))}: ${esc(fmtTip(vals[i]))}</title></circle>`).join('')}
       ${points.map((p, i) => {
         const last = i === points.length - 1;
         if (!(i % step === 0 || last) || (!last && points.length - 1 - i < step / 2)) return '';
@@ -1157,7 +1264,8 @@
     const missingRates = nw.assets.filter((a) => !Calc.rateKnown(a.currency, M()));
 
     return `
-      ${sectionHeader('Panou principal', `Actualizat: ${new Date(M().last_updated).getFullYear() > 2000 ? new Date(M().last_updated).toLocaleString('ro-RO') : '—'}`, null, currencySwitch())}
+      ${sectionHeader('Panou principal', `Actualizat: ${new Date(M().last_updated).getFullYear() > 2000 ? new Date(M().last_updated).toLocaleString('ro-RO') : '—'}`, null,
+        `<div class="flex flex-wrap items-center gap-2"><button data-action="nav" data-view="update" class="btn-secondary btn-sm no-print">✏️ Actualizează soldurile</button>${currencySwitch()}</div>`)}
       <div class="grid gap-4 lg:grid-cols-3">
         <section class="card lg:col-span-2 bg-gradient-to-br from-teal-700 to-teal-900 text-white border-0">
           <p class="text-teal-100 text-sm">${mine ? `Averea ta (${esc(me.name)})` : 'Avere netă totală a familiei'}</p>
@@ -1170,11 +1278,14 @@
           ${nw.unallocated > 0.5 ? `<p class="mt-2 text-sm text-teal-100">Nealocat pe membri: ${money(nw.unallocated)}</p>` : ''}
         </section>
         <section class="card">
-          <h3 class="font-semibold mb-3">Alerte & remindere</h3>
+          <div class="flex items-center justify-between gap-2 mb-3"><h3 class="font-semibold">Alerte & remindere</h3>
+            <button data-action="exportIcs" class="btn-ghost btn-sm no-print" title="Exportă scadențele în Google Calendar (.ics)">📅 Calendar</button></div>
           ${alertsHtml(true)}
         </section>
       </div>
       ${dashboardPieCard(nw, mine)}
+      <div class="grid gap-4 lg:grid-cols-2 mt-4">${historyCard(nw, mine)}${incomeCard(mine)}</div>
+      ${goalsCard()}
       ${mine ? '' : `<section class="card mt-4">
         <div class="flex items-center justify-between gap-3 mb-4"><h3 class="font-semibold">Defalcare pe membri (Account Splitting)</h3>
           <button data-action="nav" data-view="analysis" class="btn-ghost btn-sm">🔎 Analiză detaliată →</button></div>
@@ -1203,6 +1314,67 @@
     rows.forEach((r) => { byCat[r.cat] = (byCat[r.cat] || 0) + r.value; });
     const total = sum(rows.map((r) => r.value));
     return { total, byCat, byMember: { [id]: total }, unallocated: 0, assets: Calc.memberAssets(D(), id) };
+  }
+
+  function historyCard(nw, mine) {
+    const me = state.profileId;
+    const cur = Calc.monthKey(new Date());
+    const pts = (D().history || []).filter((h) => h.id !== cur)
+      .map((h) => ({ date: h.id + '-01', balance: mine ? (h.byMember || {})[me] || 0 : h.total }));
+    pts.push({ date: cur + '-01', balance: nw.total });
+    const shown = pts.map((p) => ({ date: p.date, balance: conv(p.balance) }));
+    const last = pts[pts.length - 1].balance, prev = pts.length > 1 ? pts[pts.length - 2].balance : null;
+    const delta = prev != null ? last - prev : null;
+    return `<section class="card">
+      <div class="flex flex-wrap items-baseline justify-between gap-2 mb-3"><h3 class="font-semibold">📈 Evoluția ${mine ? 'averii tale' : 'averii'}</h3>
+        ${delta != null ? `<span class="text-sm tabular-nums ${delta >= 0 ? 'text-emerald-700' : 'text-rose-600'}">${delta >= 0 ? '▲' : '▼'} ${money(Math.abs(delta))} față de luna trecută</span>` : ''}</div>
+      ${pts.length < 2 ? '<p class="text-sm text-slate-500 mb-2">Aplicația salvează automat totalul în fiecare lună. Graficul apare de la a doua lună.</p>' : ''}
+      ${lineChart(shown, '#0f766e', { fmt: (v) => Calc.formatMoney(v, dispCur()) })}
+    </section>`;
+  }
+
+  function incomeCard(mine) {
+    const me = state.profileId;
+    const share = (e) => (mine ? (e.holders.find((h) => h.member_id === me) || { percentage: 0 }).percentage / 100 : 1);
+    const ev = Calc.incomeSchedule(D(), new Date(), 12).map((e) => Object.assign({}, e, { mine: e.base * share(e) })).filter((e) => e.mine > 0);
+    const income = ev.filter((e) => e.kind !== 'principal');
+    const total = sum(income.map((e) => e.mine));
+    const icon = { deposit: '🏦', coupon: '🎟', principal: '↩️' };
+    const kindLabel = { deposit: 'dobândă netă la scadență', coupon: 'cupon anual', principal: 'rambursare principal' };
+    const months = [...new Set(ev.map((e) => e.date.slice(0, 7)))];
+    return `<section class="card">
+      <div class="flex flex-wrap items-baseline justify-between gap-2 mb-3"><h3 class="font-semibold">💰 Venituri pasive — următoarele 12 luni</h3>
+        <span class="text-sm font-semibold tabular-nums text-emerald-700">+${money(total)}</span></div>
+      ${ev.length ? `<div class="space-y-3 max-h-80 overflow-y-auto pr-1">${months.map((mo) => `<div>
+          <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">${esc(new Date(mo + '-01T00:00:00').toLocaleDateString('ro-RO', { month: 'long', year: 'numeric' }))}</p>
+          <ul class="mt-1 space-y-1 text-sm">${ev.filter((e) => e.date.startsWith(mo)).map((e) => `<li class="flex items-center gap-2" data-tip="${esc(e.label)} · ${esc(kindLabel[e.kind])} · ${esc(Calc.formatDate(e.date))}">
+            <span aria-hidden="true">${icon[e.kind]}</span><span class="flex-1 min-w-0 truncate">${esc(e.label)} <span class="text-slate-500">· ${esc(e.holders.map((h) => memberName(h.member_id)).join(', '))}</span></span>
+            <span class="tabular-nums whitespace-nowrap ${e.kind === 'principal' ? 'text-slate-500' : 'font-semibold text-emerald-700'}">${e.kind === 'principal' ? '' : '+'}${money(e.mine)}</span></li>`).join('')}</ul></div>`).join('')}</div>`
+        : '<p class="text-sm text-slate-500">Completează dobânda și scadența la depozite și la titlurile de stat (Fidelis, Tezaur) ca să vezi aici ce încasați, lună cu lună.</p>'}
+    </section>`;
+  }
+
+  function goalsCard() {
+    const goals = D().goals || [];
+    if (!goals.length && !isAdmin()) return '';
+    return `<section class="card mt-4">
+      <div class="flex items-center justify-between gap-3 mb-3"><h3 class="font-semibold">🎯 Obiective</h3>
+        ${isAdmin() ? '<button data-action="add" data-collection="goals" class="btn-secondary btn-sm no-print">+ Obiectiv</button>' : ''}</div>
+      ${goals.length ? `<ul class="space-y-4">${goals.map((g) => {
+        const target = Calc.toBase(g.target_amount, g.currency, M());
+        const current = sum((g.accounts || []).map(accountBaseValue));
+        const pct = target ? Math.min(100, (current / target) * 100) : 0;
+        const left = Math.max(0, target - current);
+        const dl = Calc.parseDate(g.deadline);
+        const monthsLeft = dl ? Math.max(1, (dl.getFullYear() - new Date().getFullYear()) * 12 + dl.getMonth() - new Date().getMonth()) : null;
+        return `<li>
+          <div class="flex items-start justify-between gap-3"><div class="min-w-0"><p class="font-medium">${esc(g.name)}</p>
+            <p class="text-xs text-slate-500">${money(current)} din ${money(target)}${dl ? ` · termen ${esc(Calc.formatDate(g.deadline))}` : ''}${(g.accounts || []).length ? '' : ' · niciun cont legat'}</p></div>
+            ${cardActions('goals', g.id)}</div>
+          <div class="mt-2">${progressBar(pct, pct >= 100 ? '#10b981' : '#0f766e', 'h-2.5')}</div>
+          <p class="text-xs mt-1 ${pct >= 100 ? 'text-emerald-700 font-medium' : 'text-slate-500'}">${pct >= 100 ? '🎉 Obiectiv atins!' : `${Math.round(pct)}% · mai sunt ${money(left)}${monthsLeft ? ` · ~${money(left / monthsLeft)}/lună până la termen` : ''}`}</p></li>`;
+      }).join('')}</ul>` : '<p class="text-sm text-slate-500">Ex: „Fond de urgență — 6 luni de cheltuieli” sau „Facultate Sonia 2036”, cu conturile care contribuie.</p>'}
+    </section>`;
   }
 
   function dashboardPieCard(nw, mine = false) {
@@ -1598,6 +1770,9 @@
           <div class="flex items-start justify-between gap-3"><div class="min-w-0"><h3 class="font-semibold text-lg">${esc(a.platform)}</h3><p class="text-sm text-slate-500">${esc(a.account_type)}</p></div>${cardActions('investment_accounts', a.id)}</div>
           <div class="mt-3">${valueBlock(a.total_value, a.currency)}</div>
           ${myShareLine(a, base)}
+          ${Calc.isBond(a.account_type) && (Calc.num(a.interest_rate) > 0 || a.maturity_date) ? `<dl class="grid grid-cols-2 gap-2 mt-3 text-sm">
+            <div class="stat"><dt>Cupon anual</dt><dd>${Calc.num(a.interest_rate)}%${Calc.num(a.interest_rate) > 0 ? ` · ${money(Calc.num(a.total_value) * Calc.num(a.interest_rate) / 100 * (1 - (a.tax_rate == null || a.tax_rate === '' ? 0 : Calc.num(a.tax_rate)) / 100), a.currency)} net` : ''}</dd></div>
+            <div class="stat"><dt>Scadență</dt><dd>${Calc.formatDate(a.maturity_date)}</dd></div></dl>` : ''}
           ${Calc.isDeposit(a.account_type) && (Calc.num(a.interest_rate) > 0 || a.maturity_date) ? `<dl class="grid grid-cols-2 gap-2 mt-3 text-sm">
             <div class="stat"><dt>Dobândă</dt><dd>${Calc.num(a.interest_rate)}% / an</dd></div>
             <div class="stat"><dt>Scadență</dt><dd>${Calc.formatDate(a.maturity_date)}${Calc.daysUntil(a.maturity_date) != null ? ` <span class="badge bg-slate-100 text-slate-600">${Calc.daysUntil(a.maturity_date) < 0 ? 'scadent' : Calc.formatDays(Calc.daysUntil(a.maturity_date))}</span>` : ''}</dd></div>
@@ -1632,6 +1807,7 @@
             ${a.iban_or_account ? `<div class="stat col-span-2"><dt>IBAN / Cont</dt><dd class="font-mono text-xs break-all">${esc(a.iban_or_account)}</dd></div>` : ''}
           </dl>
           ${Calc.num(a.interest_rate) > 0 ? `<div class="mt-3">${depositSummaryHtml(a, a.currency)}</div>` : ''}
+          ${isAdmin() && days != null && days <= 14 ? `<button data-action="renewDeposit" data-id="${esc(a.id)}" class="btn-primary btn-sm mt-3 no-print">↻ Reînnoiește depozitul</button>` : ''}
           ${splitsHtml(splits, base)}
           ${a.notes ? `<p class="mt-3 text-sm text-slate-600 border-t border-slate-100 pt-3 whitespace-pre-line">${esc(a.notes)}</p>` : ''}
         </article>`;
@@ -1991,6 +2167,184 @@
     if (settings.driveConnected) persist(); // urcă datele în folderul privat la următoarea sincronizare
   }
 
+  /* ---------- Actualizare rapidă a soldurilor ---------- */
+  function renderUpdate() {
+    const mine = mineOnly(), me = state.profileId;
+    const groups = [
+      ['investment_accounts', '📈 Investiții', 'total_value', (a) => !mine || myPct(a) > 0],
+      ['grandparents_accounts', '🏦 Bănci & Depozite', 'principal_amount', (a) => !mine || myPct(a) > 0],
+      ['children_savings', '🐷 Conturi copii', 'current_balance', (a) => !mine || a.child_id === me],
+      ['real_estate', '🏡 Imobiliare', 'estimated_value', (a) => !mine || a.owner_id === me],
+      ['vehicles', '🚗 Auto', 'estimated_market_value', (a) => !mine || a.owner_id === me]
+    ];
+    const ago = (iso) => { const d = Date.parse(iso || ''); if (!d) return 'neactualizat încă'; const n = Math.floor((Date.now() - d) / 86400000); return n <= 0 ? 'azi' : n === 1 ? 'ieri' : `acum ${n} zile`; };
+    const label = (c, a) => (c === 'children_savings' ? `${a.account_type || 'Cont'} — ${memberName(a.child_id)}` : c === 'real_estate' ? a.title : c === 'vehicles' ? a.name : [itemTitle(c, a), a.account_type].filter(Boolean).join(' — '));
+    const owner = (c, a) => (c === 'children_savings' ? memberName(a.child_id) : holdersNames(a));
+    const blocks = groups.map(([c, title, field, keep]) => {
+      const list = (D()[c] || []).filter(keep);
+      if (!list.length) return '';
+      return `<section class="card"><h3 class="font-semibold mb-3">${title}</h3><div class="divide-y divide-slate-100">${list.map((a) => `
+        <label class="flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-1 py-2.5">
+          <span class="flex-1 min-w-[12rem]"><span class="block font-medium text-sm">${esc(label(c, a))}</span>
+            <span class="block text-xs text-slate-500">${esc(owner(c, a))} · ${esc(ago(a.updated_at))}</span></span>
+          <span class="flex items-center gap-2 w-full sm:w-auto"><input type="number" step="any" min="0" inputmode="decimal" class="input sm:w-40 text-right tabular-nums"
+            data-q data-col="${c}" data-id="${esc(a.id)}" data-field="${field}" value="${esc(a[field] == null ? '' : a[field])}" aria-label="${esc(label(c, a))}">
+          <span class="w-10 text-sm font-mono text-slate-500">${esc(a.currency || baseCur())}</span></span>
+        </label>`).join('')}</div></section>`;
+    }).join('');
+    return sectionHeader('Actualizare rapidă', 'Scrie noile solduri și salvează o singură dată — de exemplu lunar, după ce verifici aplicațiile băncilor și brokerilor.') +
+      (blocks ? `<form data-form="quickUpdate" class="space-y-4">${blocks}
+        <div class="sticky bottom-3 flex justify-end"><button class="btn-primary shadow-lg">💾 Salvează soldurile</button></div></form>`
+        : emptyState('Nu există conturi de actualizat.'));
+  }
+
+  /* ---------- Reînnoire depozit la scadență ---------- */
+  const addDaysISO = (iso, n) => { const d = Calc.parseDate(iso) || new Date(); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  function renewDepositForm(id) {
+    const a = D().grandparents_accounts.find((x) => x.id === id);
+    if (!a || !isAdmin()) return;
+    const r = Calc.depositReturn(a);
+    const term = r.days || 365;
+    const start = a.maturity_date || Calc.todayISO();
+    openModal({
+      title: '↻ Reînnoiește depozitul',
+      body: `<div class="space-y-3 text-sm">
+        <p class="text-slate-600">${esc(a.bank_name)} · sold ${money(Calc.num(a.principal_amount), a.currency)}${Calc.num(a.interest_rate) > 0 ? ` + dobândă netă ${money(r.net, a.currency)} = <strong>${money(r.value, a.currency)}</strong>` : ''}</p>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <label class="field"><span class="field-label">Sumă nouă (${esc(a.currency)}) *</span><input name="principal" type="number" step="any" min="0" class="input" value="${Math.round(r.value * 100) / 100}" required>
+            <span class="field-hint">Implicit dobânda e capitalizată</span></label>
+          <label class="field"><span class="field-label">Dobândă anuală (%)</span><input name="rate" type="number" step="any" min="0" max="100" class="input" value="${esc(a.interest_rate || 0)}"></label>
+          <label class="field"><span class="field-label">Data constituirii</span><input name="start" type="date" class="input" value="${esc(start)}"></label>
+          <label class="field"><span class="field-label">Data scadenței</span><input name="end" type="date" class="input" value="${esc(addDaysISO(start, term))}"></label>
+        </div></div>`,
+      submitLabel: 'Reînnoiește',
+      onSubmit: (form) => {
+        const principal = parseFloat(form.principal.value), rate = parseFloat(form.rate.value || '0');
+        if (!(principal >= 0)) { showFormErrors(['Sumă invalidă.']); return false; }
+        if (form.end.value && form.start.value && form.end.value <= form.start.value) { showFormErrors(['Scadența trebuie să fie după data constituirii.']); return false; }
+        commit((d) => {
+          const x = d.grandparents_accounts.find((y) => y.id === id);
+          const note = `Reînnoit ${Calc.formatDate(form.start.value || start)}: ${fmtVal(Calc.num(x.principal_amount))} → ${fmtVal(principal)} ${x.currency}, ${rate}%`;
+          Object.assign(x, { principal_amount: principal, interest_rate: rate, start_date: form.start.value || null, maturity_date: form.end.value || null, maturity_value: null });
+          x.notes = x.notes ? `${x.notes}\n${note}` : note;
+        }, 'Depozit reînnoit.');
+        return true;
+      }
+    });
+  }
+
+  /* ---------- Export calendar (.ics) ---------- */
+  function exportIcs() {
+    const ev = [];
+    const add = (date, title, desc, uid) => { if (date) ev.push({ date, title, desc, uid }); };
+    D().grandparents_accounts.forEach((a) => add(a.maturity_date, `Scadență depozit ${a.bank_name} (${holdersNames(a)})`,
+      `${money(Calc.num(a.principal_amount), a.currency)}${Calc.num(a.interest_rate) > 0 ? ` → ${money(Calc.depositReturn(a).value, a.currency)}` : ''}`, `${a.id}-scadenta`));
+    D().investment_accounts.forEach((a) => {
+      if (Calc.isDeposit(a.account_type) || Calc.isBond(a.account_type)) add(a.maturity_date, `Scadență ${a.platform} — ${a.account_type} (${holdersNames(a)})`, money(Calc.num(a.total_value), a.currency), `${a.id}-scadenta`);
+    });
+    Calc.incomeSchedule(D(), new Date(), 24).filter((e) => e.kind === 'coupon').forEach((e) =>
+      add(e.date, `Cupon ${e.label}`, `+${Calc.formatMoney(e.amount, e.currency)} net`, `${e.id}-cupon-${e.date}`));
+    D().vehicles.forEach((v) => Object.entries(v.documents || {}).forEach(([k, doc]) =>
+      doc && add(doc.expiration_date, `Expiră ${(Calc.DOC_LABELS && Calc.DOC_LABELS[k]) || k.toUpperCase()} — ${v.name}`, v.plate_number || '', `${v.id}-${k}`)));
+    if (!ev.length) { toast('Nu există scadențe de exportat.', 'info'); return; }
+    const escT = (t) => String(t).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
+    const ymd = (iso) => iso.replace(/-/g, '');
+    const next = (iso) => ymd(addDaysISO(iso, 1));
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+    const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Patrimoniu Familial//RO', 'CALSCALE:GREGORIAN', 'X-WR-CALNAME:Patrimoniu Familial'];
+    ev.forEach((e) => lines.push('BEGIN:VEVENT', `UID:${e.uid}@patrimoniu-familial`, `DTSTAMP:${stamp}`, `DTSTART;VALUE=DATE:${ymd(e.date)}`, `DTEND;VALUE=DATE:${next(e.date)}`,
+      `SUMMARY:${escT(e.title)}`, `DESCRIPTION:${escT(e.desc)}`,
+      'BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:-P7D', `DESCRIPTION:${escT(e.title)}`, 'END:VALARM',
+      'BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:-P1D', `DESCRIPTION:${escT(e.title)}`, 'END:VALARM', 'END:VEVENT'));
+    lines.push('END:VCALENDAR');
+    const blob = new Blob([lines.join('\r\n') + '\r\n'], { type: 'text/calendar;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'patrimoniu-scadente.ics';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast(`${ev.length} scadențe exportate. Deschide fișierul .ics ca să le adaugi în calendar.`, 'success', 6000);
+  }
+
+  /* ---------- Cursuri valutare automate (cursul de referință BCE) ---------- */
+  async function updateRates({ manual = false } = {}) {
+    if (!isAdmin()) return;
+    const curs = Object.keys(M().exchange_rates || {}).filter((c) => c !== baseCur());
+    if (!curs.length) { if (manual) toast('Nu există valute de actualizat.', 'info'); return; }
+    const want = [...new Set([...curs, baseCur()].filter((c) => c !== 'EUR'))];
+    const res = await fetch(`https://api.frankfurter.dev/v1/latest?from=EUR&to=${want.map(encodeURIComponent).join(',')}`);
+    if (!res.ok) throw new Error('Serviciul de cursuri valutare nu răspunde.');
+    const j = await res.json();
+    const eurIn = (c) => (c === 'EUR' ? 1 : j.rates && j.rates[c]);
+    const baseRate = eurIn(baseCur());
+    if (!baseRate) throw new Error('Moneda de bază nu are curs BCE.');
+    const next = {};
+    curs.forEach((c) => { const v = eurIn(c); next[c] = v ? Math.round((baseRate / v) * 10000) / 10000 : M().exchange_rates[c]; });
+    settings.lastRatesCheck = Date.now(); saveSettings();
+    const changed = curs.some((c) => Math.abs(+next[c] - +M().exchange_rates[c]) > 0.00005) || M().rates_date !== j.date;
+    if (changed) commit((d) => { d.metadata.exchange_rates = next; d.metadata.rates_date = j.date; d.metadata.rates_source = 'BCE'; }, manual ? `Cursuri actualizate (BCE, ${j.date}).` : null);
+    else if (manual) toast('Cursurile sunt deja la zi.', 'info');
+  }
+  function maybeAutoRates() {
+    if (!isAdmin() || settings.ratesAuto === false || !navigator.onLine) return;
+    if (Date.now() - (settings.lastRatesCheck || 0) < 6 * 3600e3) return;
+    updateRates().catch(() => { /* reîncearcă data viitoare */ });
+  }
+
+  /* ---------- Backup-uri automate în Drive (folderul privat al contului) ---------- */
+  async function maybeBackup(force = false) {
+    if (!settings.driveConnected || !DriveSync.hasValidToken()) return;
+    if (!force && Date.now() - (settings.lastBackupCheck || 0) < 6 * 3600e3) return;
+    settings.lastBackupCheck = Date.now(); saveSettings();
+    const list = await DriveSync.listBackups();
+    const newest = list[0] && Date.parse(list[0].createdTime);
+    if (force || !newest || Date.now() - newest > 7 * 86400e3) await DriveSync.createBackup(D());
+    const all = await DriveSync.listBackups();
+    for (const f of all.slice(10)) { try { await DriveSync.deleteFile(f.id); } catch (e) { /* ignore */ } }
+  }
+  async function showBackups() {
+    const box = $('#backup-list');
+    if (!box) return;
+    if (!DriveSync.hasValidToken()) { box.innerHTML = '<p class="text-slate-500">Conectează Google Drive.</p>'; return; }
+    box.textContent = 'Se încarcă…';
+    try {
+      const list = await DriveSync.listBackups();
+      box.innerHTML = list.length ? `<ul class="divide-y divide-slate-100">${list.map((f) => `<li class="flex items-center gap-3 py-2">
+        <span class="flex-1">🗄 ${esc(new Date(f.createdTime).toLocaleString('ro-RO'))} <span class="text-slate-500">· ${Math.max(1, Math.round((+f.size || 0) / 1024))} KB</span></span>
+        <button data-action="backupRestore" data-id="${esc(f.id)}" data-date="${esc(f.createdTime)}" class="btn-secondary btn-sm">Restaurează</button></li>`).join('')}</ul>`
+        : '<p class="text-slate-500">Nu există încă backup-uri.</p>';
+    } catch (e) { box.innerHTML = `<p class="text-rose-600">${esc(e.message)}</p>`; }
+  }
+  async function restoreBackup(id, date) {
+    if (!(await confirmDialog('Restaurează backup', `Datele vor fi înlocuite cu cele din backup-ul din ${new Date(date).toLocaleString('ro-RO')}. Restaurarea se sincronizează ca o modificare normală.`, 'Restaurează'))) return;
+    const finish = (data) => replaceData(data, 'Backup restaurat.');
+    try { finish(await DriveSync.readBackup(id)); }
+    catch (e) {
+      if (e.code !== 'NEED_PASSWORD') { toast(e.message, 'error'); return; }
+      openModal({
+        title: '🔒 Backup cu altă parolă',
+        body: '<p class="text-sm text-slate-600 mb-3">Backup-ul a fost criptat cu o parolă mai veche a familiei.</p><input name="bkpw" type="password" autocomplete="off" class="input" required aria-label="Parola backupului">',
+        submitLabel: 'Deschide',
+        onSubmit: async (form) => {
+          const data = await FWVault.open(form.bkpw.value, e.envelope);
+          if (!data) { showFormErrors(['Parolă greșită.']); return false; }
+          setTimeout(() => finish(data), 0);
+          return true;
+        }
+      });
+    }
+  }
+
+  /* ---------- Temă (luminoasă / întunecată / automată) ---------- */
+  function applyTheme() {
+    const t = settings.theme || 'auto';
+    const root = document.documentElement;
+    if (t === 'auto') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', t);
+    const dark = t === 'dark' || (t === 'auto' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', dark ? '#0b1220' : '#0f766e');
+    Calc.setDarkPalette(dark);
+  }
+
   function renderSettings() {
     const rates = M().exchange_rates || {};
     return sectionHeader('Setări') + `
@@ -2024,6 +2378,11 @@
       <section class="card">
         <h3 class="font-semibold">💱 Cursuri valutare</h3>
         <p class="text-sm text-slate-500 mt-1">Moneda de bază: <strong>${esc(baseCur())}</strong>. 1 unitate valută = X ${esc(baseCur())}.</p>
+        <div class="flex flex-wrap items-center gap-2 mt-2 text-sm">
+          <label class="flex items-center gap-2"><input type="checkbox" data-action="toggleRatesAuto" ${settings.ratesAuto === false ? '' : 'checked'} class="w-4 h-4 accent-teal-600"> Actualizare automată zilnică (curs BCE)</label>
+          <button type="button" data-action="ratesNow" class="btn-ghost btn-sm">↻ Actualizează acum</button>
+          ${M().rates_date ? `<span class="text-slate-500">Ultimul curs: ${esc(M().rates_source || '')} ${esc(Calc.formatDate(M().rates_date))}</span>` : ''}
+        </div>
         <form data-form="rates" class="mt-3 space-y-2">
           ${Object.keys(rates).map((c) => `<div class="flex items-center gap-2"><span class="w-14 font-mono font-semibold">${esc(c)}</span>
             <input name="rate_${esc(c)}" type="number" step="any" min="0" value="${esc(rates[c])}" class="input flex-1">
@@ -2039,6 +2398,29 @@
         <p class="text-sm mt-2">${D().family_members.filter((m) => m.auth).length} din ${D().family_members.length} profiluri au parolă.</p>
         <p class="text-xs text-slate-400 mt-2">Parola blochează interfața; datele de pe dispozitiv nu sunt criptate.</p>
         <button data-action="nav" data-view="members" class="btn-secondary btn-sm mt-3">Gestionează parolele →</button>
+      </section>
+
+      <section class="card">
+        <h3 class="font-semibold">🎨 Aspect</h3>
+        <p class="text-sm text-slate-500 mt-1">Tema se salvează pe acest dispozitiv.</p>
+        <div class="cur-switch mt-3" role="group" aria-label="Temă">${[['auto', 'Automat'], ['light', 'Luminos'], ['dark', 'Întunecat']].map(([v, l]) =>
+          `<button data-action="setTheme" data-value="${v}" aria-pressed="${(settings.theme || 'auto') === v}" class="${(settings.theme || 'auto') === v ? 'cur-active' : ''}">${l}</button>`).join('')}</div>
+      </section>
+
+      <section class="card">
+        <h3 class="font-semibold">🗄 Backup-uri automate</h3>
+        <p class="text-sm text-slate-500 mt-1">O copie ${FWVault.enabled() ? 'criptată ' : ''}a datelor se salvează săptămânal în folderul privat din Google Drive al contului conectat. Se păstrează ultimele 10.</p>
+        <div class="flex flex-wrap gap-2 mt-3">
+          <button data-action="backupNow" class="btn-secondary" ${settings.driveConnected ? '' : 'disabled'}>💾 Fă un backup acum</button>
+          <button data-action="backupList" class="btn-secondary" ${settings.driveConnected ? '' : 'disabled'}>📋 Vezi backup-urile</button>
+        </div>
+        <div id="backup-list" class="mt-3 text-sm"></div>
+      </section>
+
+      <section class="card lg:col-span-2">
+        <h3 class="font-semibold">🕘 Jurnal modificări</h3>
+        <p class="text-sm text-slate-500 mt-1 mb-3">Cine a modificat ce și când (ultimele 40). Se sincronizează între dispozitive.</p>
+        ${changelogHtml()}
       </section>
 
       <section class="card">
@@ -2085,7 +2467,7 @@
   const VIEWS = {
     dashboard: renderDashboard, myassets: renderMyAssets, analysis: renderAnalysis,
     investments: renderInvestments, grandparents: renderGrandparents, realestate: renderRealEstate,
-    children: renderChildren, vehicles: renderVehicles, guide: renderGuide, members: renderMembers, settings: renderSettings
+    children: renderChildren, vehicles: renderVehicles, update: renderUpdate, guide: renderGuide, members: renderMembers, settings: renderSettings
   };
 
   function render() {
@@ -2111,7 +2493,7 @@
     state.view = 'dashboard';
     window.scrollTo(0, 0);
     render();
-    if (m && m.role === 'admin') setSync(state.sync.status, state.sync.message);
+    if (m && m.role === 'admin') { setSync(state.sync.status, state.sync.message); maybeAutoRates(); }
   }
 
   function selectProfile(id) {
@@ -2289,6 +2671,14 @@
     setPieDim: (ds) => { settings.pie = Object.assign(pieSettings(), { dashDim: ds.value }); saveSettings(); render(); },
     setPieSort: (ds) => { settings.pie = Object.assign(pieSettings(), { [ds.chart === 'ana' ? 'anaSort' : 'dashSort']: ds.value }); saveSettings(); render(); },
     setDisplayCurrency: (ds) => { settings.displayCurrency = ds.value; saveSettings(); render(); },
+    renewDeposit: (ds) => renewDepositForm(ds.id),
+    exportIcs: () => exportIcs(),
+    ratesNow: () => updateRates({ manual: true }).catch((e) => toast(e.message, 'error')),
+    toggleRatesAuto: (ds, el) => { settings.ratesAuto = el.checked; saveSettings(); if (el.checked) updateRates({ manual: true }).catch(() => {}); },
+    backupNow: () => maybeBackup(true).then(() => { toast('Backup salvat în Google Drive.', 'success'); showBackups(); }).catch((e) => toast(e.message, 'error')),
+    backupList: () => showBackups(),
+    backupRestore: (ds) => restoreBackup(ds.id, ds.date),
+    setTheme: (ds) => { settings.theme = ds.value; saveSettings(); applyTheme(); render(); },
     sharedCreate: () => sharedCreate(),
     sharedPick: () => sharedPick(),
     sharedShare: () => sharedShareForm(),
@@ -2374,6 +2764,24 @@
       start(normalizeData(data));
     },
     guide: (form) => commit((d) => { d.emergency_guide.instructions = form.instructions.value; }, 'Instrucțiuni salvate.'),
+    quickUpdate: (form) => {
+      const changes = [];
+      const errors = [];
+      form.querySelectorAll('input[data-q]').forEach((el) => {
+        const rec = (D()[el.dataset.col] || []).find((x) => x.id === el.dataset.id);
+        if (!rec) return;
+        const v = el.value === '' ? null : parseFloat(el.value);
+        if (v != null && (!Number.isFinite(v) || v < 0)) { errors.push(el.getAttribute('aria-label')); return; }
+        if (v !== (rec[el.dataset.field] == null ? null : Calc.num(rec[el.dataset.field]))) changes.push([el.dataset.col, el.dataset.id, el.dataset.field, v]);
+      });
+      if (errors.length) { toast(`Valori invalide: ${errors.join(', ')}`, 'error', 5000); return; }
+      if (!changes.length) { toast('Nicio modificare.', 'info'); return; }
+      commit((d) => changes.forEach(([c, id, f, v]) => {
+        const x = d[c].find((y) => y.id === id);
+        x[f] = v;
+        if (c === 'children_savings') pushHistory(x);
+      }), `${changes.length} ${changes.length === 1 ? 'sold actualizat' : 'solduri actualizate'}.`);
+    },
     apiKey: (form) => {
       settings.apiKey = form.apiKey.value.trim(); saveSettings();
       toast(settings.apiKey ? 'Cheia Google API a fost salvată.' : 'Cheia a fost ștearsă.', 'success'); render();
@@ -2565,6 +2973,8 @@
      INIT
      ====================================================================== */
   async function init() {
+    applyTheme();
+    if (window.matchMedia) { try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if ((settings.theme || 'auto') === 'auto') { applyTheme(); if (state.data) render(); } }); } catch (e) { /* ignore */ } }
     if ('serviceWorker' in navigator && location.protocol !== 'file:') {
       navigator.serviceWorker.register('sw.js').catch((err) => console.warn('SW:', err));
     }
@@ -2585,6 +2995,7 @@
     state.data = data;
     saveData(state.data);
     loadBase();
+    setTimeout(maybeAutoRates, 500);
     let pid = null;
     try { pid = localStorage.getItem(LS.PROFILE); } catch (e) { /* ignore */ }
     const m = pid && member(pid);

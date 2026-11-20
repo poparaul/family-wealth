@@ -22,6 +22,7 @@
   let salt = null;     // base64
   let iter = ITER;
   let password = null; // doar în memorie, ca să putem citi o anvelopă cu alt salt (ex. parolă schimbată pe alt dispozitiv)
+  const known = new Map(); // salt → cheie: cheile folosite în această sesiune (ex. cea dinaintea schimbării parolei)
 
   const supported = () => !!(global.crypto && crypto.subtle && crypto.getRandomValues);
   const isEnvelope = (x) => !!x && typeof x === 'object' && x.fw_vault === 1 && typeof x.ct === 'string' && typeof x.salt === 'string';
@@ -51,6 +52,7 @@
 
   async function adopt(k, s, it, pw) {
     key = k; salt = s; iter = it;
+    known.set(s + ':' + it, k);
     if (pw) password = pw;
     await saveSession();
   }
@@ -62,6 +64,7 @@
       if (!s || !s.key) return false;
       key = await crypto.subtle.importKey('raw', unb64(s.key), { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
       salt = s.salt; iter = s.iter || ITER;
+      known.set(salt + ':' + iter, key);
       return true;
     } catch (e) { return false; }
   }
@@ -93,6 +96,11 @@
     const it = env.iter || ITER;
     if (key && env.salt === salt && it === iter) {
       try { return await decryptWith(key, env); } catch (e) { /* cheie diferită — parola a fost schimbată */ }
+    }
+    // O cheie mai veche din această sesiune (ex. fișierul din Drive încă e criptat cu parola dinaintea schimbării)
+    const old = known.get(env.salt + ':' + it);
+    if (old && old !== key) {
+      try { return await decryptWith(old, env); } catch (e) { /* nu se potrivește */ }
     }
     if (password) {
       try {
@@ -130,6 +138,7 @@
   /** Uită cheia pe acest dispozitiv (blocare / dezactivare). */
   function lock() {
     key = null; salt = null; iter = ITER; password = null;
+    known.clear();
     try { sessionStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ }
   }
 

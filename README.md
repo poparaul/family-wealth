@@ -41,6 +41,7 @@ Fiecare dispozitiv păstrează versiunea de la ultima sincronizare (`fw_sync_bas
 | `js/drive-sync.js` | GIS OAuth2 + Drive API (list / get / POST multipart / PATCH) |
 | `js/vault.js` | Criptare AES-256-GCM cu parola familiei |
 | `js/merge.js` | Îmbinare în 3 direcții la sincronizare |
+| `tests/` | Teste `node --test` + jsdom, date fictive |
 | `js/calculators.js` | Splitting, conversii valutare, zile rămase, alerte |
 | `sw.js` | Cache offline (network-first pentru app, cache-first pentru CDN) |
 
@@ -56,6 +57,26 @@ Setări → 🔐 Criptare date. Datele sunt criptate cu AES-256-GCM, cu o cheie 
 - Fără scripturi de pe CDN: Tailwind e generat local în `css/tailwind.css` (vezi `tailwind.config.js`). După ce adaugi clase noi:
   `npx tailwindcss@3.4.16 -i css/tailwind.input.css -o css/tailwind.css --minify`
 - Content-Security-Policy în `index.html`: scripturi doar din aplicație și Google Identity Services; conexiuni doar spre Google APIs.
+
+## Funcții
+- **Actualizare rapidă** (tab „Actualizare”): toate soldurile într-o listă, salvate o dată.
+- **Evoluția averii**: o fotografie lunară a totalurilor (`history`, sincronizată) → grafic pe Panou.
+- **Cursuri automate**: cursul de referință BCE prin `api.frankfurter.dev`, o dată la 6 ore pe dispozitivele administratorilor (BNR nu permite citirea din browser — lipsește CORS).
+- **Venituri pasive**: dobânzi la scadența depozitelor și cupoane anuale la titluri de stat (data cuponului = ziua/luna scadenței; Fidelis/Tezaur fără impozit), pe următoarele 12 luni.
+- **Backup-uri**: săptămânal, criptat, în `appDataFolder` al contului conectat; se păstrează ultimele 10; restaurare din Setări.
+- **Jurnal de modificări** (`changelog`, ultimele 300): cine, ce, când.
+- **Reînnoire depozit** la scadență, cu dobânda capitalizată.
+- **Obiective** (`goals`) cu conturi legate, progres și suma lunară necesară.
+- **Export calendar (.ics)**: scadențe, cupoane, documente auto, cu alarme cu 7 și 1 zi înainte.
+- **Temă** automată / luminoasă / întunecată; paleta graficelor are nuanțe separate pentru fundal închis.
+
+## Teste
+```bash
+npm ci
+npm test            # unitare (îmbinare, calcule, criptare + sincronizare) și interfață (aplicația reală în jsdom)
+npm run build:css   # regenerează css/tailwind.css după ce adaugi clase noi
+```
+Testele folosesc doar date fictive (`tests/fixtures/family.js`) și un Google Drive simulat. Rulează automat pe GitHub la fiecare push (`.github/workflows/tests.yml`), care verifică și că `css/tailwind.css` e la zi.
 
 ## Parole pe profil
 Fiecare membru poate avea o parolă (Membri → 🔑, sau 🔑 din antet pentru propriul profil). Se salvează doar hash-ul PBKDF2-SHA256 cu salt aleator, în `family_members[].auth`, care se sincronizează în Drive. Adminul poate reseta parola oricui. Parola blochează interfața, nu criptează datele.

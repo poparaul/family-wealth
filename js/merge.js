@@ -9,7 +9,10 @@
 (function (global) {
   'use strict';
 
-  const COLLECTIONS = ['family_members', 'investment_accounts', 'grandparents_accounts', 'real_estate', 'children_savings', 'vehicles'];
+  const COLLECTIONS = ['family_members', 'investment_accounts', 'grandparents_accounts', 'real_estate', 'children_savings', 'vehicles', 'goals', 'history', 'changelog'];
+  // Colecții tehnice: fără updated_at și fără mesaj de conflict (istoricul lunar, jurnalul).
+  const QUIET = ['history', 'changelog'];
+  const STAMPED = COLLECTIONS.filter((c) => !QUIET.includes(c));
 
   /** JSON cu chei sortate — pentru comparații independente de ordinea cheilor. */
   function stable(v) {
@@ -57,18 +60,18 @@
         const localNewer = recordNewer(l, r, ctx);
         const fields = [];
         out.push(mergeFields(ctx.hasBase ? b : null, l, r, localNewer, (k) => fields.push(k)));
-        if (fields.length) ctx.conflicts.push({ collection: name, id, fields, kept: localNewer ? 'local' : 'remote' });
+        if (fields.length && !QUIET.includes(name)) ctx.conflicts.push({ collection: name, id, fields, kept: localNewer ? 'local' : 'remote' });
         return;
       }
       if (l) {               // lipsește din Drive
         if (!b) out.push(clone(l));                       // adăugat pe acest dispozitiv
-        else if (!eq(l, b)) { out.push(clone(l)); ctx.conflicts.push({ collection: name, id, fields: ['(șters pe alt dispozitiv, modificat aici)'], kept: 'local' }); }
+        else if (!eq(l, b)) { out.push(clone(l)); if (!QUIET.includes(name)) ctx.conflicts.push({ collection: name, id, fields: ['(șters pe alt dispozitiv, modificat aici)'], kept: 'local' }); }
         // altfel: șters pe alt dispozitiv și neatins aici → rămâne șters
         return;
       }
       if (r) {               // lipsește local
         if (!b) out.push(clone(r));                       // adăugat pe alt dispozitiv
-        else if (!eq(r, b)) { out.push(clone(r)); ctx.conflicts.push({ collection: name, id, fields: ['(șters aici, modificat pe alt dispozitiv)'], kept: 'remote' }); }
+        else if (!eq(r, b)) { out.push(clone(r)); if (!QUIET.includes(name)) ctx.conflicts.push({ collection: name, id, fields: ['(șters aici, modificat pe alt dispozitiv)'], kept: 'remote' }); }
         // altfel: șters aici → rămâne șters
       }
     });
@@ -94,7 +97,10 @@
     };
     const b = base || {};
     const out = {};
-    COLLECTIONS.forEach((c) => { out[c] = mergeList(c, base ? b[c] : null, local[c], remote[c], ctx); });
+    COLLECTIONS.forEach((c) => {
+      if (!(c in local) && !(c in remote)) return; // colecție inexistentă pe ambele părți (ex. date vechi)
+      out[c] = mergeList(c, base ? b[c] : null, local[c], remote[c], ctx);
+    });
 
     // metadate: cursuri valutare pe monedă, restul câmp cu câmp
     const bm = b.metadata || null, lm = local.metadata || {}, rm = remote.metadata || {};
@@ -127,8 +133,8 @@
   /** Marchează cu updated_at conturile adăugate sau modificate între două stări (folosit la fiecare salvare). */
   function stampChanges(before, after, now) {
     const idx = new Map();
-    COLLECTIONS.forEach((c) => (before[c] || []).forEach((x) => x && x.id && idx.set(c + ':' + x.id, stable(omit(x, ['updated_at'])))));
-    COLLECTIONS.forEach((c) => (after[c] || []).forEach((x) => {
+    STAMPED.forEach((c) => (before[c] || []).forEach((x) => x && x.id && idx.set(c + ':' + x.id, stable(omit(x, ['updated_at'])))));
+    STAMPED.forEach((c) => (after[c] || []).forEach((x) => {
       if (!x || !x.id) return;
       if (idx.get(c + ':' + x.id) !== stable(omit(x, ['updated_at']))) x.updated_at = now;
     }));

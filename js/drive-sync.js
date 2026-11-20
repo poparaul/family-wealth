@@ -193,6 +193,28 @@
     }
   }
 
+  /* ---------- Backup-uri (mereu în folderul privat appDataFolder al contului conectat) ---------- */
+  const BACKUP_PREFIX = 'family_wealth_backup_';
+  async function listBackups() {
+    const q = encodeURIComponent(`name contains '${BACKUP_PREFIX}' and trashed=false`);
+    const res = await api(`${API}/files?spaces=appDataFolder&q=${q}&fields=files(id,name,createdTime,size)&orderBy=createdTime%20desc&pageSize=50`);
+    return (await res.json()).files || [];
+  }
+  async function createBackup(data) {
+    const boundary = 'fw' + Math.random().toString(36).slice(2);
+    const meta = { name: `${BACKUP_PREFIX}${new Date().toISOString().slice(0, 10)}.json`, parents: ['appDataFolder'], mimeType: 'application/json' };
+    const body =
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n` +
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(await encodeOut(data))}\r\n` +
+      `--${boundary}--`;
+    const res = await api(`${UPLOAD}/files?uploadType=multipart&fields=id,name,createdTime`, {
+      method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body
+    });
+    return res.json();
+  }
+  async function readBackup(id) { return decodeIn(await download(id)); } // NEED_PASSWORD dacă e criptat cu altă parolă
+  async function deleteFile(id) { await api(`${API}/files/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
+
   /* ---------- Fișier partajat ---------- */
   /** Creează în „Drive-ul meu” un fișier vizibil cu datele (criptate dacă e activă parola familiei). */
   async function createSharedFile(data, name) {
@@ -316,6 +338,8 @@
     hasFileScope: () => fileScope,
     createSharedFile: (data, name) => serialize(() => createSharedFile(data, name)),
     shareFile, listPermissions, fileMeta, pickFile,
+    listBackups, readBackup, deleteFile,
+    createBackup: (data) => serialize(() => createBackup(data)),
     getFileId: () => fileId
   };
 })(window);
