@@ -100,3 +100,18 @@ test('lista de active: sortare pe toate coloanele', async () => {
   assert.ok(sorted(col(3)));
   assert.ok(app.q('th[aria-sort="ascending"] [data-value="holders"]'));
 });
+
+test('investiție: câmpul „Titular cont” (implicit profilul curent), afișat pe card', async () => {
+  const app = await boot({ data: makeFamily(), profile: 'm_a' });
+  const f = await editCard(app, 'investments', 'Trading 212');
+  const owner = f.querySelector('select[data-path="owner_id"]');
+  assert.ok(owner, 'câmpul există');
+  owner.value = 'm_i';
+  app.submit(f); await wait(50);
+  assert.equal(app.stored().investment_accounts.find((a) => a.id === 'inv_t212').owner_id, 'm_i');
+  const card = app.qa('#app article.card').find((a) => a.textContent.includes('Trading 212'));
+  assert.ok(card.textContent.includes('Titular: Ioana'));
+  assert.ok(card.textContent.includes('Andrei'), 'împărțirea banilor rămâne la Andrei');
+  app.click(app.q('[data-action="add"][data-collection="investment_accounts"]')); await wait(40);
+  assert.equal(app.modal().querySelector('select[data-path="owner_id"]').value, 'm_a', 'cont nou: titular = profilul curent');
+});

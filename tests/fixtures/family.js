@@ -21,7 +21,8 @@ function makeFamily(now = new Date()) {
         interest_rate: 6.5, maturity_date: addDays(now, 3650 + 40), tax_rate: 0, splits: [split('m_k')] },
       { id: 'inv_fid_c', platform: 'Tradeville', account_type: 'Titluri de stat (Fidelis / Tezaur)', total_value: 20000, currency: 'EUR', notes: 'comun',
         splits: [split('m_i', 15), split('m_g', 85)] },
-      { id: 'inv_rev', platform: 'Revolut', account_type: 'Acțiuni internaționale', total_value: 1000, currency: 'EUR', notes: '', splits: [split('m_i')] }
+      { id: 'inv_rev', platform: 'Revolut', account_type: 'Acțiuni internaționale', total_value: 1000, currency: 'EUR', notes: '', splits: [split('m_i')] },
+      { id: 'inv_btc', platform: 'Robinhood', account_type: 'Crypto (Bitcoin, Ethereum etc.)', total_value: 2000, currency: 'USD', notes: '', splits: [split('m_a')] }
     ],
     grandparents_accounts: [
       { id: 'bank_rf', bank_name: 'Raiffeisen Bank', account_type: 'Depozit la termen', owner_id: 'm_a', iban_or_account: '', principal_amount: 30000,

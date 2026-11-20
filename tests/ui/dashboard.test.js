@@ -80,3 +80,46 @@ test('obiective: adăugare cu conturi legate, progres și sumă lunară necesar�
   assert.ok(card.textContent.includes('15%'), '15.000 din 100.000 RON');
   assert.ok(card.textContent.includes('/lună până la termen'));
 });
+
+test('crypto: categorie separată — tab propriu, card pe Panou, în grafic, analiză și ghid', async () => {
+  const app = await boot({ data: makeFamily() });
+  const cryptoCard = app.qa('button.card').find((b) => b.textContent.includes('Crypto'));
+  assert.ok(cryptoCard && cryptoCard.textContent.includes('1 înregistrări'), 'card „Crypto” pe Panou');
+  assert.ok(app.qa('.pie-wrap path, .pie-wrap circle').some((p) => p.getAttribute('data-tip').startsWith('Crypto')), 'felie „Crypto” în grafic');
+  await app.nav('crypto');
+  const titles = () => app.qa('#app article.card h3').map((h) => h.textContent);
+  assert.deepEqual(titles(), ['Robinhood'], 'tab Crypto: doar conturile crypto');
+  await app.nav('investments');
+  assert.ok(!titles().includes('Robinhood'), 'tab Investiții: fără crypto');
+  await app.nav('crypto');
+  app.click(app.q('[data-action="addCrypto"]')); await wait(40);
+  assert.ok(/Crypto/.test(app.modal().querySelector('[data-path="account_type"]').value), 'cont nou: tip Crypto precompletat');
+  app.click(app.q('#modal-root [data-action="closeModal"]')); await wait(20);
+  await app.nav('analysis');
+  assert.ok(app.q('[data-action="toggleCat"][data-value="crypto"]'), 'filtru „Crypto” în analiză');
+  await app.nav('guide');
+  assert.ok(app.text().includes('Robinhood'), 'ghidul listează crypto fără erori');
+  assert.equal(app.errors.length, 0, app.errors.join('; '));
+});
+
+test('ascunde sumele: 👁 din antet maschează sumele, păstrează procentele; calendarul are sumele reale', async () => {
+  const app = await boot({ data: makeFamily() });
+  const btn = () => app.q('header [data-action="toggleMask"]');
+  assert.ok(btn(), 'butonul 👁 în antet');
+  const hero = () => app.q('.text-4xl').textContent.trim();
+  assert.match(hero(), /\d/);
+  app.click(btn()); await wait(20);
+  assert.ok(hero().startsWith('••••'), 'totalul e ascuns');
+  const legend = app.qa('section.card ul.space-y-2 li').map((li) => li.textContent);
+  assert.ok(legend.length && legend.every((t) => t.includes('••••') && /%/.test(t)), 'legenda: sume ascunse, procente vizibile');
+  await app.nav('investments');
+  assert.ok(!/30\.000/.test(app.text()), 'nicio sumă pe carduri');
+  await app.nav('dashboard');
+  app.click(app.q('[data-action="exportIcs"]')); await wait(30);
+  const ics = await app.blobText(app.blobs[0]);
+  assert.ok(/\d{1,3}(\.\d{3})+/.test(ics) && !ics.includes('••••'), 'fișierul .ics conține sumele reale');
+  app.click(btn()); await wait(20);
+  assert.match(hero(), /\d/, 'sumele reapar');
+  assert.equal(app.settings().hideAmounts, false);
+});
+

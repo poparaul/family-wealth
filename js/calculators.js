@@ -13,12 +13,15 @@
 
   const CATEGORIES = {
     investment_accounts:   { label: 'Investiții',     color: PALETTE[0] },
+    crypto:                { label: 'Crypto',         color: PALETTE[5] },
     grandparents_accounts: { label: 'Bănci & depozite', color: PALETTE[1] },
     real_estate:           { label: 'Imobiliare',     color: PALETTE[2] },
     children_savings:      { label: 'Economii copii', color: PALETTE[3] },
     vehicles:              { label: 'Vehicule',       color: PALETTE[4] }
   };
-  const CAT_SLOT = { investment_accounts: 0, grandparents_accounts: 1, real_estate: 2, children_savings: 3, vehicles: 4 };
+  const CAT_SLOT = { investment_accounts: 0, grandparents_accounts: 1, real_estate: 2, children_savings: 3, vehicles: 4, crypto: 5 };
+  // Crypto = categorie separată, dedusă din tipul contului de investiții (fără colecție nouă).
+  const isCrypto = (type) => /crypto|cripto|bitcoin|\bbtc\b|ethereum|\beth\b|solana|stablecoin/i.test(type || '');
   /** Comută paleta (în loc) pentru tema întunecată; toate culorile derivate o urmează. */
   function setDarkPalette(on) {
     const src = on ? PALETTE_DARK : PALETTE_LIGHT;
@@ -111,7 +114,7 @@
     const fromSplits = (splits) => (splits || []).map((s) => ({ member_id: s.member_id, pct: num(s.percentage) }));
 
     (data.investment_accounts || []).forEach((a) => out.push({
-      cat: 'investment_accounts', id: a.id,
+      cat: isCrypto(a.account_type) ? 'crypto' : 'investment_accounts', id: a.id,
       label: [a.platform, a.account_type].filter(Boolean).join(' — '),
       value: toBase(a.total_value, a.currency, m), raw: num(a.total_value), currency: a.currency,
       institution: a.platform || 'Necunoscut',
@@ -260,7 +263,7 @@
 
   function maturityAlerts(data, today = new Date(), within = 30) {
     const invDeposits = (data.investment_accounts || []).filter((a) => isDeposit(a.account_type) && a.maturity_date)
-      .map((a) => Object.assign({}, a, { bank_name: a.platform, principal_amount: a.total_value, owner_id: null }));
+      .map((a) => Object.assign({}, a, { bank_name: a.platform, principal_amount: a.total_value, owner_id: a.owner_id || null }));
     return (data.grandparents_accounts || []).concat(invDeposits)
       .map((a) => ({ account: a, days: daysUntil(a.maturity_date, today) }))
       .filter((x) => x.days != null && x.days <= within)
@@ -339,7 +342,7 @@
   }
 
   global.Calc = {
-    DOC_LABELS, CATEGORIES, PALETTE, setDarkPalette, OTHER_COLOR, UNALLOCATED, DEFAULT_BONUS, num,
+    DOC_LABELS, CATEGORIES, PALETTE, setDarkPalette, isCrypto, OTHER_COLOR, UNALLOCATED, DEFAULT_BONUS, num,
     baseCurrency, rateKnown, toBase, shareRows,
     splitsTotal, validateSplits, equalSplit,
     todayISO, monthKey, parseDate, daysUntil, alertLevel,
