@@ -239,6 +239,8 @@
   const conv = (v) => { const c = dispCur(); return c === baseCur() ? v : v / +M().exchange_rates[c]; };
   // Mod „ascunde sumele” (per dispozitiv): orice sumă afișată devine „•••• RON”. Procentele rămân vizibile.
   const masked = () => !!settings.hideAmounts;
+  // Câmpurile numerice care sunt sume (nu procente, dobânzi sau zile) — ascunse în formulare când masked().
+  const isAmountKey = (k) => !/rate|percent|due_day|share_percentage|^int$/i.test(k || '');
   const fmtMoney = (v, cur) => (masked() ? `•••• ${cur || baseCur()}` : Calc.formatMoney(v, cur));
   const money = (v, cur) => (cur ? fmtMoney(v, cur) : fmtMoney(conv(v), dispCur()));
   const displayCurrencies = () => [baseCur(), ...Object.keys(M().exchange_rates || {}).filter((c) => c !== baseCur() && Calc.rateKnown(c, M()))];
@@ -878,7 +880,9 @@
       case 'textarea':
         input = `<textarea ${common} rows="3" class="input">${esc(v)}</textarea>`; break;
       case 'number':
-        input = `<input ${common} type="number" inputmode="decimal" step="${f.int ? 1 : 'any'}" ${f.min != null ? `min="${f.min}"` : ''} ${f.max != null ? `max="${f.max}"` : ''} value="${v == null ? '' : esc(v)}" class="input">`; break;
+        input = `<input ${common} type="number" inputmode="decimal" step="${f.int ? 1 : 'any'}" ${f.min != null ? `min="${f.min}"` : ''} ${f.max != null ? `max="${f.max}"` : ''} ${masked() && isAmountKey(f.k) && v != null && v !== ''
+          ? `value="" placeholder="•••• (ascuns — gol = neschimbat)" data-masked="1" data-orig="${esc(v)}"`
+          : `value="${v == null ? '' : esc(v)}"`} class="input">`; break;
       case 'date':
         input = `<input ${common} type="date" value="${esc(v || '')}" class="input">`; break;
       case 'checkbox':
@@ -952,7 +956,11 @@
     const root = $('#modal-root');
     if (!root || !root.querySelector('[data-path]')) return;
     const val = (k) => { const el = root.querySelector(`[data-path="${k}"]`); return el ? el.value : null; };
-    const numOrNull = (k) => { const v = val(k); return v == null || v === '' ? null : parseFloat(v); };
+    const numOrNull = (k) => {
+      const el = root.querySelector(`[data-path="${k}"]`);
+      const v = el && el.dataset.masked && el.value === '' ? el.dataset.orig : val(k);
+      return v == null || v === '' ? null : parseFloat(v);
+    };
     const acc = {
       account_type: val('account_type'), interest_rate: numOrNull('interest_rate'), start_date: val('start_date') || null,
       maturity_date: val('maturity_date') || null, tax_rate: numOrNull('tax_rate'), maturity_value: numOrNull('maturity_value')
@@ -1023,6 +1031,7 @@
           const el = form.querySelector(`[data-path="${f.k}"]`);
           if (!el) return;
           let v;
+          if (f.type === 'number' && el.dataset.masked && el.value === '') return; // sumă ascunsă, necompletată → neschimbată
           if (f.type === 'checkbox') v = el.checked;
           else if (f.type === 'number') {
             v = el.value === '' ? null : parseFloat(el.value);
@@ -2225,7 +2234,7 @@
       body: `<div class="space-y-3 text-sm">
         <p class="text-slate-600">${esc(a.bank_name)} · sold ${money(Calc.num(a.principal_amount), a.currency)}${Calc.num(a.interest_rate) > 0 ? ` + dobândă netă ${money(r.net, a.currency)} = <strong>${money(r.value, a.currency)}</strong>` : ''}</p>
         <div class="grid gap-3 sm:grid-cols-2">
-          <label class="field"><span class="field-label">Sumă nouă (${esc(a.currency)}) *</span><input name="principal" type="number" step="any" min="0" class="input" value="${Math.round(r.value * 100) / 100}" required>
+          <label class="field"><span class="field-label">Sumă nouă (${esc(a.currency)}) *</span><input name="principal" type="number" step="any" min="0" class="input" ${masked() ? 'value="" placeholder="•••• (gol = dobânda capitalizată)"' : `value="${Math.round(r.value * 100) / 100}" required`}>
             <span class="field-hint">Implicit dobânda e capitalizată</span></label>
           <label class="field"><span class="field-label">Dobândă anuală (%)</span><input name="rate" type="number" step="any" min="0" max="100" class="input" value="${esc(a.interest_rate || 0)}"></label>
           <label class="field"><span class="field-label">Data constituirii</span><input name="start" type="date" class="input" value="${esc(start)}"></label>
@@ -2233,7 +2242,8 @@
         </div></div>`,
       submitLabel: 'Reînnoiește',
       onSubmit: (form) => {
-        const principal = parseFloat(form.principal.value), rate = parseFloat(form.rate.value || '0');
+        const principal = form.principal.value === '' && masked() ? Math.round(r.value * 100) / 100 : parseFloat(form.principal.value);
+        const rate = parseFloat(form.rate.value || '0');
         if (!(principal >= 0)) { showFormErrors(['Sumă invalidă.']); return false; }
         if (form.end.value && form.start.value && form.end.value <= form.start.value) { showFormErrors(['Scadența trebuie să fie după data constituirii.']); return false; }
         commit((d) => {

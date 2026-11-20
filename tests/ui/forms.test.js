@@ -130,3 +130,30 @@ test('actualizare rapidă cu sumele ascunse: câmpuri goale, doar ce completezi 
   assert.equal(d.changelog.length, 1);
 });
 
+test('formulare cu sumele ascunse: sumele goale rămân neschimbate, procentele rămân vizibile', async () => {
+  const app = await boot({ data: makeFamily(), settings: { hideAmounts: true } });
+  let f = await editCard(app, 'grandparents', 'Revolut');
+  const amount = f.querySelector('[data-path="principal_amount"]');
+  assert.equal(amount.value, '', 'suma nu apare');
+  assert.ok(amount.placeholder.includes('••••'));
+  assert.notEqual(f.querySelector('[data-path="interest_rate"]').value, '', 'dobânda (%) rămâne vizibilă');
+  f.querySelector('textarea[data-path="notes"]').value = 'doar nota';
+  app.submit(f); await wait(50);
+  let x = app.stored().grandparents_accounts.find((a) => a.id === 'bank_rev_i');
+  assert.equal(x.principal_amount, 600, 'suma neschimbată');
+  assert.equal(x.notes, 'doar nota');
+  f = await editCard(app, 'grandparents', 'Revolut');
+  f.querySelector('[data-path="principal_amount"]').value = '750';
+  app.submit(f); await wait(50);
+  assert.equal(app.stored().grandparents_accounts.find((a) => a.id === 'bank_rev_i').principal_amount, 750);
+  // reînnoire depozit: suma ascunsă, gol = dobânda capitalizată
+  await app.nav('grandparents');
+  const card = app.qa('#app article.card').find((a) => a.querySelector('[data-action="renewDeposit"]'));
+  app.click(card.querySelector('[data-action="renewDeposit"]')); await wait(40);
+  f = app.modal();
+  assert.equal(f.principal.value, '');
+  assert.ok(!/30\.?\d{3}/.test(app.q('#modal-root').textContent), 'nicio sumă în fereastră');
+  app.submit(f); await wait(50);
+  assert.ok(app.stored().grandparents_accounts.find((a) => a.id === 'bank_rf').principal_amount > 30000, 'capitalizat');
+});
+
