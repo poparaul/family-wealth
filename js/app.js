@@ -35,8 +35,7 @@
     { id: 'children', label: 'Copii', icon: '🐷' },
     { id: 'vehicles', label: 'Auto', icon: '🚗' },
     { id: 'guide', label: 'Ghid Urgență', icon: '🆘' },
-    { id: 'members', label: 'Membri', icon: '👪' },
-    { id: 'settings', label: 'Setări', icon: '⚙️' }
+    { id: 'members', label: 'Membri', icon: '👪' }
   ];
   const NAV_VIEWER = [
     { id: 'dashboard', label: 'Partea mea', icon: '📊' },
@@ -2476,7 +2475,7 @@
     const me = currentMember();
     if (!me) { app.innerHTML = renderProfilePicker(); return; }
     if (me.role === 'viewer_restricted') { app.innerHTML = renderChildMode(); return; }
-    const allowed = (isAdmin() ? NAV_ADMIN : NAV_VIEWER).map((n) => n.id);
+    const allowed = (isAdmin() ? NAV_ADMIN.concat([{ id: 'settings' }]) : NAV_VIEWER).map((n) => n.id); // Setări: din rotița din antet
     if (!allowed.includes(state.view)) state.view = 'dashboard';
     const y = window.scrollY;
     app.innerHTML = renderShell(VIEWS[state.view]());

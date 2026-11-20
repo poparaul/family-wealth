@@ -50,11 +50,12 @@ test('administrator: comutatorul „Ale mele” în antet; vizualizare: are 🔑
   assert.ok(!app.q('header [data-view="settings"]'), 'vizualizare: fără Setări');
 });
 
-test('Setări: accesibile din rotița din antet și din tab-uri (care trec pe două rânduri pe ecran mare)', async () => {
+test('Setări: doar din rotița din antet (nu mai sunt în tab-uri)', async () => {
   const app = await boot({ data: makeFamily() });
   const gear = app.q('header > div [data-action="nav"][data-view="settings"]');
   assert.ok(gear, 'rotița ⚙️ în antet');
   app.click(gear); await wait(30);
   assert.ok(app.text().includes('Cursuri valutare'), 'deschide Setările');
-  assert.ok(app.q('nav[aria-label="Module"]').className.includes('lg:flex-wrap'));
+  assert.ok(!app.q('nav[aria-label="Module"] [data-view="settings"]'), 'Setări nu mai e în tab-uri');
+  assert.ok(app.q('header > div [data-view="settings"]'), 'rotița rămâne în antet și pe pagina Setări');
 });
