@@ -47,4 +47,14 @@ test('administrator: comutatorul „Ale mele” în antet; vizualizare: are 🔑
   assert.ok(app.text().includes('Partea ta 15%'), 'cota din Fidelis-ul comun');
   app = await boot({ data: makeFamily(), profile: 'm_g' });
   assert.ok(app.q('header [data-action="ownPassword"]') && !app.q('header .mine-switch'));
+  assert.ok(!app.q('header [data-view="settings"]'), 'vizualizare: fără Setări');
+});
+
+test('Setări: accesibile din rotița din antet și din tab-uri (care trec pe două rânduri pe ecran mare)', async () => {
+  const app = await boot({ data: makeFamily() });
+  const gear = app.q('header > div [data-action="nav"][data-view="settings"]');
+  assert.ok(gear, 'rotița ⚙️ în antet');
+  app.click(gear); await wait(30);
+  assert.ok(app.text().includes('Cursuri valutare'), 'deschide Setările');
+  assert.ok(app.q('nav[aria-label="Module"]').className.includes('lg:flex-wrap'));
 });

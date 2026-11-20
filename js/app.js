@@ -1206,9 +1206,10 @@
         ${isAdmin()
           ? `<button data-action="toggleMine" role="switch" aria-checked="${mineOnly()}" class="mine-switch ${mineOnly() ? 'on' : ''}" title="${mineOnly() ? 'Arată toată familia' : 'Arată doar activele mele'}"><span class="mine-track"><span class="mine-knob"></span></span><span>Ale mele</span></button>`
           : `<button data-action="ownPassword" class="btn-ghost btn-sm" title="${me.auth ? 'Schimbă parola' : 'Setează o parolă'}" aria-label="Parola mea">🔑</button>`}
+        ${isAdmin() ? `<button data-action="nav" data-view="settings" class="btn-ghost btn-sm ${state.view === 'settings' ? 'text-teal-700' : ''}" title="Setări" aria-label="Setări">⚙️</button>` : ''}
         <button data-action="switchProfile" class="btn-secondary btn-sm" title="Schimbă profilul">${avatar(me, 'w-6 h-6 text-xs')}<span class="hidden sm:inline">Schimbă</span></button>
       </div>
-      <nav class="max-w-6xl mx-auto px-2 flex items-center gap-1 overflow-x-auto no-scrollbar" aria-label="Module">
+      <nav class="max-w-6xl mx-auto px-2 flex items-center gap-1 overflow-x-auto no-scrollbar lg:flex-wrap lg:overflow-visible" aria-label="Module">
         ${nav.map((n) => `<button data-action="nav" data-view="${n.id}" class="tab ${state.view === n.id ? 'tab-active' : ''}" ${state.view === n.id ? 'aria-current="page"' : ''}><span aria-hidden="true">${n.icon}</span> ${n.label}</button>`).join('')}
       </nav>
     </header>
