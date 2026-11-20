@@ -2200,11 +2200,13 @@
           <span class="flex-1 min-w-[12rem]"><span class="block font-medium text-sm">${esc(label(c, a))}</span>
             <span class="block text-xs text-slate-500">${esc(owner(c, a))} · ${esc(ago(a.updated_at))}</span></span>
           <span class="flex items-center gap-2 w-full sm:w-auto"><input type="number" step="any" min="0" inputmode="decimal" class="input sm:w-40 text-right tabular-nums"
-            data-q data-col="${c}" data-id="${esc(a.id)}" data-field="${field}" value="${esc(a[field] == null ? '' : a[field])}" aria-label="${esc(label(c, a))}">
+            data-q data-col="${c}" data-id="${esc(a.id)}" data-field="${field}" ${masked() ? 'data-masked="1" value="" placeholder="•••• (ascuns)"' : `value="${esc(a[field] == null ? '' : a[field])}"`} aria-label="${esc(label(c, a))}">
           <span class="w-10 text-sm font-mono text-slate-500">${esc(a.currency || baseCur())}</span></span>
         </label>`).join('')}</div></section>`;
     }).join('');
-    return sectionHeader('Actualizare rapidă', 'Scrie noile solduri și salvează o singură dată — de exemplu lunar, după ce verifici aplicațiile băncilor și brokerilor.') +
+    return sectionHeader('Actualizare rapidă', masked()
+        ? 'Sumele sunt ascunse (👁). Completează doar ce vrei să schimbi — câmpurile goale rămân neschimbate.'
+        : 'Scrie noile solduri și salvează o singură dată — de exemplu lunar, după ce verifici aplicațiile băncilor și brokerilor.') +
       (blocks ? `<form data-form="quickUpdate" class="space-y-4">${blocks}
         <div class="sticky bottom-3 flex justify-end"><button class="btn-primary shadow-lg">💾 Salvează soldurile</button></div></form>`
         : emptyState('Nu există conturi de actualizat.'));
@@ -2785,6 +2787,7 @@
       form.querySelectorAll('input[data-q]').forEach((el) => {
         const rec = (D()[el.dataset.col] || []).find((x) => x.id === el.dataset.id);
         if (!rec) return;
+        if (el.dataset.masked && el.value === '') return; // sumă ascunsă, necompletată → rămâne neschimbată
         const v = el.value === '' ? null : parseFloat(el.value);
         if (v != null && (!Number.isFinite(v) || v < 0)) { errors.push(el.getAttribute('aria-label')); return; }
         if (v !== (rec[el.dataset.field] == null ? null : Calc.num(rec[el.dataset.field]))) changes.push([el.dataset.col, el.dataset.id, el.dataset.field, v]);

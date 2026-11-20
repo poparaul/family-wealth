@@ -115,3 +115,18 @@ test('investiție: câmpul „Titular cont” (implicit profilul curent), afișa
   app.click(app.q('[data-action="add"][data-collection="investment_accounts"]')); await wait(40);
   assert.equal(app.modal().querySelector('select[data-path="owner_id"]').value, 'm_a', 'cont nou: titular = profilul curent');
 });
+
+test('actualizare rapidă cu sumele ascunse: câmpuri goale, doar ce completezi se schimbă', async () => {
+  const app = await boot({ data: makeFamily(), settings: { hideAmounts: true } });
+  await app.nav('update');
+  const inputs = app.qa('input[data-q]');
+  assert.ok(inputs.length && inputs.every((i) => i.value === '' && i.placeholder.includes('••••')), 'nicio sumă în câmpuri');
+  assert.ok(!/30\.?000/.test(app.q('#app').textContent), 'nicio sumă în pagină');
+  app.q('input[data-q][data-id="inv_xtb"]').value = '275';
+  app.submit(app.q('[data-form="quickUpdate"]')); await wait(50);
+  const d = app.stored();
+  assert.equal(d.investment_accounts.find((a) => a.id === 'inv_xtb').total_value, 275);
+  assert.equal(d.investment_accounts.find((a) => a.id === 'inv_t212').total_value, 30000, 'câmpurile goale nu șterg valorile');
+  assert.equal(d.changelog.length, 1);
+});
+
