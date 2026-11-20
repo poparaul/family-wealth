@@ -8,7 +8,10 @@
   const CONFIG = {
     // Opțional: pune aici OAuth Client ID-ul ca să nu-l introduci manual pe fiecare dispozitiv.
     // Ex: '1234567890-abc.apps.googleusercontent.com'
-    GOOGLE_CLIENT_ID: '224663736671-oia6ij7slsdnmqpbjhibdfe4lcpp6qpl.apps.googleusercontent.com'
+    GOOGLE_CLIENT_ID: '224663736671-oia6ij7slsdnmqpbjhibdfe4lcpp6qpl.apps.googleusercontent.com',
+    // Cheie Google API (doar pentru selectorul de fișiere — fișierul partajat). Publică prin natura ei;
+    // restricționeaz-o în Cloud Console la Google Picker API și la adresele aplicației.
+    GOOGLE_API_KEY: 'AIzaSyAyw9uTPWFN0Z003KcfdVjWh0ZwBWvtmIE'
   };
 
   const LS = { DATA: 'fw_data', PROFILE: 'fw_profile', SETTINGS: 'fw_settings', ANALYSIS: 'fw_analysis' };
@@ -149,6 +152,27 @@
   }
   const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  // Baza de sincronizare: conținutul fișierului din Drive la ultima sincronizare a acestui dispozitiv.
+  // Permite îmbinarea modificărilor în loc de suprascriere. Criptată la fel ca datele.
+  const BASE_KEY = 'fw_sync_base';
+  let syncBase = null;
+  let baseChain = Promise.resolve();
+  function saveBase(d) {
+    syncBase = d ? JSON.parse(JSON.stringify(d)) : null;
+    const snap = syncBase;
+    baseChain = baseChain.then(async () => {
+      if (!snap) { try { localStorage.removeItem(BASE_KEY); } catch (e) { /* ignore */ } return; }
+      saveJSON(BASE_KEY, FWVault.enabled() ? await FWVault.encrypt(snap) : snap);
+    }).catch(() => { /* baza nu e esențială */ });
+    return baseChain;
+  }
+  async function loadBase() {
+    const raw = loadJSON(BASE_KEY, null);
+    if (!raw) { syncBase = null; return; }
+    if (FWVault.isEnvelope(raw)) { try { syncBase = await FWVault.decrypt(raw); } catch (e) { syncBase = null; } }
+    else syncBase = FWVault.enabled() ? null : raw; // bază necriptată cu criptarea activă → o ignorăm
+  }
+
   function ssGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
   function ssSet(k, v) { try { v == null ? sessionStorage.removeItem(k) : sessionStorage.setItem(k, v); } catch (e) { /* ignore */ } }
 
@@ -187,6 +211,10 @@
   delete settings.adminPinHash; // înlocuit de parolele per membru
   const saveSettings = () => saveJSON(LS.SETTINGS, settings);
   const clientId = () => settings.clientId || CONFIG.GOOGLE_CLIENT_ID;
+  const apiKey = () => settings.apiKey || CONFIG.GOOGLE_API_KEY;
+  const sharedMode = () => settings.driveMode === 'shared' && !!settings.sharedFileId;
+  const SHARED_FILE_NAME = 'Patrimoniu Familial - date (criptat).json';
+  function applyTarget() { DriveSync.setTarget({ mode: sharedMode() ? 'shared' : 'appdata', fileId: settings.sharedFileId }); }
 
   const state = {
     data: null,
@@ -278,7 +306,9 @@
   }
 
   function commit(mutator, msg) {
+    const before = JSON.parse(JSON.stringify(D()));
     mutator(D());
+    FWMerge.stampChanges(before, D(), new Date().toISOString());
     persist();
     render();
     if (msg) toast(msg, 'success');
@@ -321,12 +351,14 @@
     if (!pendingPush) return;
     if (!navigator.onLine) { setSync('offline'); return; }
     if (!DriveSync.hasValidToken()) { setSync('auth', 'Modificări nesincronizate'); return; }
+    if (!settings.allowPlainPush) return runSync({ quiet: true }); // salvare automată = sincronizare cu îmbinare
     setSync('syncing');
     try {
-      await DriveSync.push(D(), { allowPlain: !!settings.allowPlainPush });
+      await DriveSync.push(D(), { allowPlain: true }); // criptarea tocmai a fost dezactivată: suprascriere explicită
       pendingPush = false;
-      if (settings.allowPlainPush) settings.allowPlainPush = false;
+      settings.allowPlainPush = false;
       settings.lastSync = new Date().toISOString(); saveSettings();
+      saveBase(D());
       setSync('synced');
     } catch (e) {
       if (e.code === 'NEED_PASSWORD') { setSync('auth', 'Datele din Drive sunt criptate'); askVaultPassword(e.envelope, pushNow); return; }
@@ -351,7 +383,7 @@
       const switched = !prevEmail || (!!email && email !== prevEmail);
       if (email) settings.driveEmail = email;
       settings.driveConnected = true;
-      if (switched) settings.lastSync = null;
+      if (switched) { settings.lastSync = null; saveBase(null); }
       saveSettings();
       // Cont nou pe acest dispozitiv: preia datele din Drive-ul contului, nu le suprascrie cu cele locale.
       await runSync({ preferRemote: switched });
@@ -364,27 +396,44 @@
   async function runSync(opts = {}) {
     if (!DriveSync.hasValidToken()) return connectDrive();
     if (settings.allowPlainPush) { pendingPush = true; return pushNow(); } // criptarea tocmai a fost dezactivată
+    if (syncing) { syncAgain = true; return; }
+    syncing = true;
     setSync('syncing');
+    pendingPush = false;
     try {
-      const res = await DriveSync.sync(D(), { preferRemote: !!opts.preferRemote });
-      if (res.action === 'pulled') {
-        state.data = normalizeData(res.data);
+      const snapshot = JSON.stringify(D());
+      const res = await DriveSync.sync(D(), { preferRemote: !!opts.preferRemote, base: opts.preferRemote ? null : syncBase });
+      let data = res.data || D();
+      // Ai modificat ceva cât timp rula sincronizarea? Îmbină și acele modificări și mai sincronizează o dată.
+      if (JSON.stringify(D()) !== snapshot) {
+        data = FWMerge.merge(JSON.parse(snapshot), D(), data).data;
+        syncAgain = true;
+      }
+      saveBase(res.data || D());
+      if (JSON.stringify(data) !== JSON.stringify(D())) {
+        state.data = normalizeData(data);
         saveData(state.data);
         if (!currentMember()) state.profileId = null;
-        toast(opts.preferRemote && settings.driveEmail ? `Date preluate din Google Drive (${settings.driveEmail}).` : 'Date actualizate din Google Drive.', 'success');
-      } else if (res.action === 'pushed') {
-        toast('Datele locale au fost salvate în Google Drive.', 'success');
       }
-      pendingPush = false;
+      const n = (res.conflicts || []).length;
+      if (res.action === 'pulled') toast(opts.preferRemote && settings.driveEmail ? `Date preluate din Google Drive (${settings.driveEmail}).` : 'Date actualizate din Google Drive.', 'success');
+      else if (res.action === 'merged') toast('Modificările de pe alte dispozitive au fost combinate cu ale tale.', 'success');
+      else if (res.action === 'pushed' && !opts.quiet) toast('Datele locale au fost salvate în Google Drive.', 'success');
+      if (n) toast(`${n} ${n === 1 ? 'cont a fost modificat' : 'conturi au fost modificate'} în același timp pe două dispozitive — s-a păstrat varianta mai recentă.`, 'info', 7000);
       settings.lastSync = new Date().toISOString(); saveSettings();
       setSync('synced');
       render();
     } catch (e) {
+      pendingPush = true;
       if (e.code === 'NEED_PASSWORD') { setSync('auth', 'Datele din Drive sunt criptate'); askVaultPassword(e.envelope, () => runSync(opts)); return; }
       setSync(e.status === 401 ? 'auth' : 'error', e.message);
-      toast(e.message, 'error');
+      if (!opts.quiet || e.status !== 401) toast(e.message, 'error');
+    } finally {
+      syncing = false;
+      if (syncAgain) { syncAgain = false; setTimeout(() => runSync({ quiet: true }), 300); }
     }
   }
+  let syncing = false, syncAgain = false;
 
   /* ---------- Parola familiei (criptare) ---------- */
   // Cerută când datele din Drive sunt criptate, iar acest dispozitiv încă nu are parola (sau a fost schimbată).
@@ -446,6 +495,7 @@
         const btn = form.querySelector('[type=submit]'); btn.disabled = true; btn.textContent = 'Se criptează…';
         await FWVault.setup(form.pw1.value);
         persist();
+        if (syncBase) saveBase(syncBase);
         toast(settings.driveConnected ? 'Criptare activată. Datele se criptează și în Google Drive.' : 'Criptare activată.', 'success', 5000);
         setTimeout(render, 0);
         return true;
@@ -532,6 +582,7 @@
   function disconnectDrive() {
     DriveSync.disconnect();
     settings.driveConnected = false; settings.lastSync = null; settings.driveEmail = null; saveSettings();
+    saveBase(null);
     pendingPush = false;
     setSync('off');
     render();
@@ -1828,13 +1879,127 @@
       ${s === 'error' && state.sync.message ? `<span class="text-sm text-rose-600">${esc(state.sync.message)}</span>` : ''}</div>`;
   }
 
+  /* ---------- Fișier partajat (fiecare membru cu contul lui Google) ---------- */
+  function sharedSectionHtml() {
+    const connected = settings.driveConnected;
+    const box = (inner) => `<div class="mt-5 pt-4 border-t border-slate-100">${inner}</div>`;
+    if (sharedMode()) {
+      return box(`<h4 class="font-semibold text-sm">🤝 Fișier partajat cu familia</h4>
+        <p class="text-sm mt-1"><span class="badge bg-teal-50 text-teal-800">${esc(settings.sharedFileName || 'fișier partajat')}</span>
+          ${settings.sharedOwner ? `<span class="text-slate-500">· proprietar: ${esc(settings.sharedOwner)}</span>` : ''}</p>
+        <div class="flex flex-wrap gap-2 mt-3">
+          <button data-action="sharedShare" class="btn-secondary" ${connected ? '' : 'disabled'}>➕ Dă acces cuiva</button>
+          <button data-action="sharedAccess" class="btn-secondary" ${connected ? '' : 'disabled'}>👥 Cine are acces</button>
+          <button data-action="sharedLeave" class="btn-ghost text-rose-600">Revino la folderul privat</button>
+        </div>
+        <div id="shared-access" class="mt-3 text-sm"></div>`);
+    }
+    return box(`<h4 class="font-semibold text-sm">🤝 Folosiți aplicația din conturi Google diferite</h4>
+      <p class="text-sm text-slate-500 mt-1">Mută datele într-un fișier din Drive-ul tău și partajează-l cu familia. Fiecare se conectează cu contul lui, iar aplicația are acces doar la acel fișier — nu la emailuri sau la restul Drive-ului.
+        ${FWVault.enabled() ? '' : '<br><span class="text-rose-700">Activează întâi criptarea (mai jos), ca fișierul vizibil în Drive să nu poată fi citit fără parola familiei.</span>'}</p>
+      <div class="flex flex-wrap gap-2 mt-3">
+        <button data-action="sharedCreate" class="btn-secondary" ${connected && FWVault.enabled() ? '' : 'disabled'}>📤 Creează fișier partajat</button>
+        <button data-action="sharedPick" class="btn-secondary" ${connected ? '' : 'disabled'}>📂 Alege un fișier partajat cu mine</button>
+      </div>
+      ${connected ? '' : '<p class="text-xs text-slate-500 mt-2">Conectează întâi Google Drive.</p>'}
+      <form data-form="apiKey" class="mt-3 flex flex-col sm:flex-row gap-2">
+        <input name="apiKey" class="input flex-1 font-mono text-sm" placeholder="Cheie Google API (pentru selectorul de fișiere)" value="${esc(apiKey())}" aria-label="Cheie Google API">
+        <button class="btn-secondary">Salvează cheia</button>
+      </form>`);
+  }
+
+  // Asigură un token valid cu permisiunea drive.file (cere reconectare dacă lipsește).
+  async function ensureFileScope() {
+    if (DriveSync.hasValidToken() && DriveSync.hasFileScope()) return true;
+    await DriveSync.connect(clientId(), { hint: settings.driveEmail });
+    if (!DriveSync.hasFileScope()) { toast('Trebuie acceptată permisiunea pentru fișierele folosite cu aplicația.', 'error', 6000); return false; }
+    return true;
+  }
+
+  async function sharedCreate() {
+    if (!FWVault.enabled()) { toast('Activează întâi criptarea datelor.', 'error'); return; }
+    if (!(await confirmDialog('Creează fișier partajat',
+      `Datele (criptate) vor fi copiate într-un fișier nou „${SHARED_FILE_NAME}” în Drive-ul contului ${settings.driveEmail || 'conectat'}. De acum, aplicația se va sincroniza cu acel fișier. Apoi îl partajezi cu familia.`, 'Creează'))) return;
+    try {
+      if (!(await ensureFileScope())) return;
+      setSync('syncing', 'Se creează fișierul…');
+      const f = await DriveSync.createSharedFile(D(), SHARED_FILE_NAME);
+      Object.assign(settings, { driveMode: 'shared', sharedFileId: f.id, sharedFileName: f.name, sharedOwner: settings.driveEmail || '' });
+      saveSettings(); applyTarget(); saveBase(D());
+      setSync('synced'); render();
+      toast('Fișierul partajat a fost creat. Acum dă acces membrilor familiei.', 'success', 6000);
+      setTimeout(sharedShareForm, 300);
+    } catch (e) { setSync('error', e.message); toast(e.message, 'error', 6000); }
+  }
+
+  function sharedShareForm() {
+    openModal({
+      title: '➕ Dă acces la fișier',
+      body: `<div class="space-y-3 text-sm">
+        <p class="text-slate-600">Persoana primește un email de la Google și poate edita datele. Apoi, în aplicație, se conectează cu <strong>contul ei</strong> și alege „📂 Alege un fișier partajat cu mine”.</p>
+        <label class="field"><span class="field-label">Emailul Google al persoanei *</span><input name="email" type="email" autocomplete="off" class="input" required placeholder="nume@gmail.com"></label>
+        <p class="text-slate-500">Cât timp aplicația e în modul „Testing” în Google Cloud, adresa trebuie adăugată și la <em>Audience → Test users</em>.</p>
+      </div>`,
+      submitLabel: 'Dă acces',
+      onSubmit: async (form) => {
+        const email = form.email.value.trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showFormErrors(['Adresă de email invalidă.']); return false; }
+        const btn = form.querySelector('[type=submit]'); btn.disabled = true;
+        try {
+          if (!(await ensureFileScope())) { btn.disabled = false; return false; }
+          await DriveSync.shareFile(settings.sharedFileId, email);
+          toast(`${email} are acum acces la fișier.`, 'success');
+          return true;
+        } catch (e) { btn.disabled = false; showFormErrors([e.message]); return false; }
+      }
+    });
+  }
+
+  async function sharedAccess() {
+    const box = $('#shared-access');
+    if (!box) return;
+    box.textContent = 'Se încarcă…';
+    try {
+      if (!(await ensureFileScope())) { box.textContent = ''; return; }
+      const perms = await DriveSync.listPermissions(settings.sharedFileId);
+      const role = { owner: 'proprietar', writer: 'poate edita', reader: 'poate vedea', commenter: 'poate comenta' };
+      box.innerHTML = perms.length ? `<ul class="space-y-1">${perms.map((x) => `<li>👤 ${esc(x.displayName || x.emailAddress || '—')} <span class="text-slate-500">${esc(x.emailAddress || '')} · ${role[x.role] || esc(x.role)}</span></li>`).join('')}</ul>`
+        : '<p class="text-slate-500">Nu s-au putut citi permisiunile (doar proprietarul le poate vedea pe toate).</p>';
+    } catch (e) { box.innerHTML = `<p class="text-rose-600">${esc(e.message)}</p>`; }
+  }
+
+  async function sharedPick() {
+    if (!apiKey()) { toast('Adaugă întâi cheia Google API (în Setări, la fișierul partajat).', 'error', 6000); return; }
+    try {
+      if (!(await ensureFileScope())) return;
+      const f = await DriveSync.pickFile({ apiKey: apiKey(), appId: clientId().split('-')[0] });
+      if (!f) return;
+      if (!(await confirmDialog('Folosește fișierul partajat', `Datele de pe acest dispozitiv vor fi înlocuite cu cele din „${f.name}”, iar de acum aplicația se sincronizează cu acest fișier.`, 'Folosește fișierul'))) return;
+      let owner = '';
+      try { const meta = await DriveSync.fileMeta(f.id); owner = (meta.owners && meta.owners[0] && (meta.owners[0].emailAddress || meta.owners[0].displayName)) || ''; } catch (e) { /* opțional */ }
+      Object.assign(settings, { driveMode: 'shared', sharedFileId: f.id, sharedFileName: f.name, sharedOwner: owner });
+      saveSettings(); applyTarget(); saveBase(null);
+      await runSync({ preferRemote: true });
+    } catch (e) { toast(e.message, 'error', 6000); }
+  }
+
+  async function sharedLeave() {
+    if (!(await confirmDialog('Revino la folderul privat', 'Aplicația nu se mai sincronizează cu fișierul partajat (fișierul rămâne în Drive). Datele de pe acest dispozitiv vor fi salvate în folderul privat al contului tău.', 'Revino'))) return;
+    Object.assign(settings, { driveMode: 'appdata', sharedFileId: null, sharedFileName: null, sharedOwner: null });
+    saveSettings(); applyTarget(); saveBase(null);
+    render();
+    if (settings.driveConnected) persist(); // urcă datele în folderul privat la următoarea sincronizare
+  }
+
   function renderSettings() {
     const rates = M().exchange_rates || {};
     return sectionHeader('Setări') + `
       <div class="grid gap-4 lg:grid-cols-2">
       <section class="card lg:col-span-2">
         <h3 class="font-semibold">☁️ Sincronizare Google Drive</h3>
-        <p class="text-sm text-slate-500 mt-1">Fișierul <code>${DriveSync.FILE_NAME}</code> e salvat în folderul ascuns <code>appDataFolder</code>. Aplicația nu poate vedea alte fișiere din Drive.</p>
+        <p class="text-sm text-slate-500 mt-1">${sharedMode()
+          ? `Datele sunt într-un <strong>fișier partajat</strong> din Google Drive. Aplicația are acces doar la acest fișier, nu la restul Drive-ului.`
+          : `Fișierul <code>${DriveSync.FILE_NAME}</code> e salvat în folderul ascuns <code>appDataFolder</code> al contului conectat. Aplicația nu poate vedea alte fișiere din Drive.`}</p>
         <div id="drive-status" class="mt-3">${driveStatusHtml()}</div>
         <form data-form="clientId" class="mt-4 flex flex-col sm:flex-row gap-2">
           <input name="clientId" class="input flex-1 font-mono text-sm" placeholder="xxxxxxxx.apps.googleusercontent.com" value="${esc(settings.clientId || CONFIG.GOOGLE_CLIENT_ID)}" aria-label="Google OAuth Client ID">
@@ -1844,6 +2009,7 @@
           <button data-action="connectDrive" class="btn-primary">${settings.driveConnected ? '🔄 Reconectează & sincronizează' : '🔗 Conectează Google Drive'}</button>
           ${settings.driveConnected ? `<button data-action="syncNow" class="btn-secondary">Sincronizează acum</button><button data-action="switchDriveAccount" class="btn-secondary">👤 Schimbă contul Google</button><button data-action="disconnectDrive" class="btn-ghost text-rose-600">Deconectează</button>` : ''}
         </div>
+        ${sharedSectionHtml()}
         <details class="mt-4 text-sm text-slate-600"><summary class="cursor-pointer font-medium">Cum obțin un Client ID?</summary>
           <ol class="list-decimal pl-5 mt-2 space-y-1">
             <li>Google Cloud Console → proiect nou → activează <strong>Google Drive API</strong>.</li>
@@ -2123,6 +2289,11 @@
     setPieDim: (ds) => { settings.pie = Object.assign(pieSettings(), { dashDim: ds.value }); saveSettings(); render(); },
     setPieSort: (ds) => { settings.pie = Object.assign(pieSettings(), { [ds.chart === 'ana' ? 'anaSort' : 'dashSort']: ds.value }); saveSettings(); render(); },
     setDisplayCurrency: (ds) => { settings.displayCurrency = ds.value; saveSettings(); render(); },
+    sharedCreate: () => sharedCreate(),
+    sharedPick: () => sharedPick(),
+    sharedShare: () => sharedShareForm(),
+    sharedAccess: () => sharedAccess(),
+    sharedLeave: () => sharedLeave(),
     connectDrive: () => connectDrive(),
     switchDriveAccount: async () => {
       if (await confirmDialog('Schimbă contul Google', 'Alegi alt cont Google. Datele de pe acest dispozitiv vor fi înlocuite cu cele din Drive-ul contului ales (dacă există acolo).', 'Alege contul')) {
@@ -2203,6 +2374,10 @@
       start(normalizeData(data));
     },
     guide: (form) => commit((d) => { d.emergency_guide.instructions = form.instructions.value; }, 'Instrucțiuni salvate.'),
+    apiKey: (form) => {
+      settings.apiKey = form.apiKey.value.trim(); saveSettings();
+      toast(settings.apiKey ? 'Cheia Google API a fost salvată.' : 'Cheia a fost ștearsă.', 'success'); render();
+    },
     clientId: (form) => {
       settings.clientId = form.clientId.value.trim(); saveSettings();
       if (settings.clientId) DriveSync.preload();
@@ -2394,6 +2569,7 @@
       navigator.serviceWorker.register('sw.js').catch((err) => console.warn('SW:', err));
     }
     if (clientId() && navigator.onLine) DriveSync.preload();
+    applyTarget();
     const stored = loadJSON(LS.DATA, null);
     if (FWVault.isEnvelope(stored)) {
       let data = null;
@@ -2408,6 +2584,7 @@
   function start(data) {
     state.data = data;
     saveData(state.data);
+    loadBase();
     let pid = null;
     try { pid = localStorage.getItem(LS.PROFILE); } catch (e) { /* ignore */ }
     const m = pid && member(pid);

@@ -19,7 +19,19 @@ Urcă folderul așa cum este. Nu e nevoie de build.
 4. Credentials → OAuth client ID → *Web application* → adaugă URL-ul de producție (și `http://localhost:8090` pentru teste — exact portul pe care rulezi local) la *Authorized JavaScript origins*.
 5. Pune Client ID-ul în aplicație (Setări) sau în `CONFIG.GOOGLE_CLIENT_ID` din `js/app.js`.
 
-Notă: `appDataFolder` aparține unui singur cont Google. Pentru aceleași date pe mai multe dispozitive, folosiți același cont Google.
+Notă: `appDataFolder` aparține unui singur cont Google. Pentru conturi Google diferite în familie, folosiți **fișierul partajat** (mai jos).
+
+### Fișier partajat (fiecare membru cu contul lui)
+Setări → Google Drive → „📤 Creează fișier partajat” (cere criptarea activă) → „➕ Dă acces” cu emailul membrului. Membrul se conectează cu contul lui și alege „📂 Alege un fișier partajat cu mine”. Aplicația folosește scope-ul `drive.file`: vede doar fișierele create de ea sau alese explicit în selectorul Google.
+
+Configurare suplimentară în Google Cloud:
+1. APIs & Services → Library → activează **Google Picker API**.
+2. Google Auth Platform → Data Access → adaugă scope-ul `https://www.googleapis.com/auth/drive.file`.
+3. Credentials → Create credentials → **API key** → restricționează-l: *Application restrictions* = Websites (`https://poparaul.github.io/*`, `http://localhost:8080/*`), *API restrictions* = Google Picker API. Pune cheia în Setări sau în `CONFIG.GOOGLE_API_KEY`.
+4. Audience → Test users: adaugă emailul fiecărui membru.
+
+### Sincronizare cu îmbinare
+Fiecare dispozitiv păstrează versiunea de la ultima sincronizare (`fw_sync_base`, criptată ca datele). La sincronizare se face îmbinare în 3 direcții (`js/merge.js`): conturile se potrivesc după `id`, câmpurile modificate doar pe o parte se păstrează, iar la un câmp schimbat pe ambele părți câștigă `updated_at` mai recent. Prima sincronizare a unui dispozitiv (fără bază) folosește regula „fișierul mai nou câștigă”.
 
 ## Structură
 | Fișier | Rol |
@@ -28,6 +40,7 @@ Notă: `appDataFolder` aparține unui singur cont Google. Pentru aceleași date 
 | `js/app.js` | State, randare UI, profiluri, formulare |
 | `js/drive-sync.js` | GIS OAuth2 + Drive API (list / get / POST multipart / PATCH) |
 | `js/vault.js` | Criptare AES-256-GCM cu parola familiei |
+| `js/merge.js` | Îmbinare în 3 direcții la sincronizare |
 | `js/calculators.js` | Splitting, conversii valutare, zile rămase, alerte |
 | `sw.js` | Cache offline (network-first pentru app, cache-first pentru CDN) |
 

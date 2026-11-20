@@ -1,8 +1,8 @@
 /* sw.js — funcționare 100% offline după prima încărcare */
-const CACHE = 'fw-pwa-v12';
+const CACHE = 'fw-pwa-v13';
 const SHELL = [
   './', './index.html', './manifest.json', './css/styles.css', './css/tailwind.css',
-  './js/app.js', './js/vault.js', './js/drive-sync.js', './js/calculators.js',
+  './js/app.js', './js/merge.js', './js/vault.js', './js/drive-sync.js', './js/calculators.js',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'
 ];
 // Resurse externe versionate (cache-first). API-urile Google NU se cache-uiesc.
