@@ -2278,7 +2278,7 @@
     });
     const open = !!(settings.holdingsOpen || {})[a.id];
     const totalProfit = hs.reduce((sum2, h) => sum2 + (h.bProfit || 0), 0);
-    const totalCost = hs.reduce((sum2, h) => sum2 + (toB(h.cost, h.currency) || 0), 0);
+    const totalCost = hs.reduce((sum2, h) => sum2 + (h.value != null ? toB(h.cost, h.currency) || 0 : 0), 0);
     const pctAll = totalCost ? (totalProfit / totalCost) * 100 : null;
     const ago = a.holdings_at ? Math.max(0, Math.round((Date.now() - Date.parse(a.holdings_at)) / 60000)) : null;
     const agoTxt = ago == null ? '' : ago < 1 ? 'acum' : ago < 60 ? `acum ${ago} min` : ago < 1440 ? `acum ${Math.round(ago / 60)} h` : `acum ${Math.round(ago / 1440)} zile`;
@@ -2316,7 +2316,7 @@
         const qty = h.qty * f, cost = h.cost * f, value = h.value == null ? null : h.value * f;
         it.qty += qty; it.cost += cost;
         if (value == null) it.priced = false; else it.value += value;
-        it.bCost += toB(cost, h.currency) || 0;
+        if (value != null) it.bCost += toB(cost, h.currency) || 0; // fără preț → nici cost în profit
         it.bValue += value == null ? 0 : toB(value, h.currency) || 0;
         if (h.price != null) it.price = h.price;
         it.brokers.push({ name: brokerName(a), platform: a.platform, owner: holdersNames(a), qty, bValue: value == null ? 0 : toB(value, h.currency) || 0 });
@@ -2427,11 +2427,15 @@
     const stat = (label, val, cls = '') => `<div class="card"><p class="text-xs text-slate-500">${label}</p><p class="text-xl font-bold mt-1 tabular-nums ${cls}">${val}</p></div>`;
     const byBroker = new Map(), byCur = new Map();
     P.items.forEach((i) => {
-      i.brokers.forEach((b) => { const g = byBroker.get(b.platform) || { key: b.platform, value: 0 }; g.value += b.bValue; byBroker.set(b.platform, g); });
+      i.brokers.forEach((b) => { const g = byBroker.get(b.name) || { key: b.name, value: 0 }; g.value += b.bValue; byBroker.set(b.name, g); });
       const g = byCur.get(i.currency) || { key: i.currency, value: 0, native: 0 }; g.value += i.bValue; g.native += i.priced ? i.value : 0; byCur.set(i.currency, g);
     });
     const donut = (title, groups, dim) => {
       const sl = foldSlices(sortGroups([...groups.values()], dim, 'value'), dim);
+      if (dim === 'institution') { // culoarea urmează brokerul (ordine alfabetică în acest grafic), nu poziția globală
+        const names = [...groups.keys()].sort((a, b) => a.localeCompare(b, 'ro'));
+        sl.forEach((x) => { if (x.key !== '__other') { const ix = names.indexOf(x.key); x.meta = { label: x.key, color: ix >= 0 && ix < Calc.PALETTE.length ? Calc.PALETTE[ix] : Calc.OTHER_COLOR }; } });
+      }
       if (dim === 'currency') sl.forEach((x) => { const g = groups.get(x.key); if (g && x.key !== '__other') x.native = g.native; }); // felia USD în $, EUR în €
       return `<section class="card"><h3 class="font-semibold mb-3">${title}</h3><div class="grid gap-4 sm:grid-cols-[10rem_1fr] items-center">
         <div class="mx-auto w-40 max-w-full">${donutSvg(sl, P.total, 'Acțiuni')}</div>${pieLegend(sl, P.total)}</div></section>`;

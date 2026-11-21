@@ -86,3 +86,21 @@ test('graficul „Pe monedă”: fiecare felie în moneda ei, indiferent de mone
   assert.ok(Math.abs(pct.reduce((a, b) => a + b, 0) - 100) < 0.5, 'procentele însumează 100%');
 });
 
+test('„Pe broker”: o felie pe cont, fără gri; costul simbolurilor fără preț nu scade profitul', async () => {
+  const d = withHoldings();
+  d.investment_accounts.push({ id: 'inv_xtb_usd', platform: 'XTB', account_type: 'Acțiuni', total_value: 0, currency: 'USD', notes: '', splits: [{ member_id: 'm_a', percentage: 100 }],
+    holdings: [{ symbol: 'NYSE:KO', qty: 10, avg: 60, price: 70, currency: 'USD', value: 700, cost: 600 }] });
+  d.investment_accounts.find((a) => a.id === 'inv_xtb').holdings = [{ symbol: 'ETR:SAP', qty: 2, avg: 100, price: 150, currency: 'EUR', value: 300, cost: 200 }];
+  const app = await boot({ data: d });
+  await app.nav('portfolio');
+  const card = app.qa('#app section.card').find((s) => s.querySelector('h3') && s.querySelector('h3').textContent === 'Pe broker');
+  const labels = [...card.querySelectorAll('ul li span.truncate')].map((x) => x.textContent);
+  assert.ok(labels.includes('XTB (USD)') && labels.includes('XTB (EUR)'), `felii separate: ${labels}`);
+  const colors = [...card.querySelectorAll('ul li span.rounded-sm')].map((x) => x.getAttribute('style'));
+  assert.ok(!colors.some((c) => c.includes('#8a8a86')), 'nicio felie gri (gri = „Alții”)');
+  // BVB:XYZ (fără preț, cost 3 RON) nu intră în profit: profit total = suma profiturilor cu preț
+  // profituri cu preț: TSLA 7×50 − 5×10 = 300 $, KO 100 $ → 400 $ × 4,5 = 1.800 lei; VWCE 200 €, SAP 100 € → 300 € × 5 = 1.500 lei
+  const profit = app.qa('#app .card').find((c) => c.querySelector('p.text-xs') && c.querySelector('p.text-xs').textContent === 'Profit');
+  assert.ok(profit.textContent.replace(/\s/g, ' ').includes('+3.300'), `profit total fără costul BVB:XYZ: ${profit.textContent}`);
+});
+

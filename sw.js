@@ -1,5 +1,5 @@
 /* sw.js — funcționare 100% offline după prima încărcare */
-const CACHE = 'fw-pwa-v30';
+const CACHE = 'fw-pwa-v31';
 const SHELL = [
   './', './index.html', './manifest.json', './css/styles.css', './css/tailwind.css',
   './js/app.js', './js/merge.js', './js/vault.js', './js/drive-sync.js', './js/calculators.js',
