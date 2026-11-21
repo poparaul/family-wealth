@@ -1827,7 +1827,9 @@
         const base = Calc.toBase(a.total_value, a.currency, M());
         return `<article class="card">
           <div class="flex items-start justify-between gap-3"><div class="min-w-0"><h3 class="font-semibold text-lg">${esc(a.platform)}</h3><p class="text-sm text-slate-500">${esc(a.account_type)}</p>
-            ${a.owner_id && member(a.owner_id) ? `<p class="text-sm mt-1 flex items-center gap-2">${avatar(member(a.owner_id), 'w-5 h-5 text-[10px]')} Titular: <strong>${esc(memberName(a.owner_id))}</strong></p>` : ''}</div>${cardActions('investment_accounts', a.id)}</div>
+            ${a.owner_id && member(a.owner_id) ? `<p class="text-sm mt-1 flex items-center gap-2">${avatar(member(a.owner_id), 'w-5 h-5 text-[10px]')} Titular: <strong>${esc(memberName(a.owner_id))}</strong></p>` : ''}
+            ${M().holdings_sheet && !Calc.isDeposit(a.account_type) && !Calc.isBond(a.account_type) && brokerKey(brokerName(a)) !== brokerKey(a.platform)
+              ? `<p class="text-xs text-slate-500 mt-1">În sheet: <code>${esc(brokerName(a))}</code></p>` : ''}</div>${cardActions('investment_accounts', a.id)}</div>
           <div class="mt-3">${valueBlock(a.total_value, a.currency)}</div>
           ${holdingsHtml(a)}
           ${myShareLine(a, base)}
@@ -2235,7 +2237,14 @@
   const SHEET_ROWS = 300;
   const SHEET_MIME = 'application/vnd.google-apps.spreadsheet';
   const holdingsAccounts = () => D().investment_accounts.filter((a) => !Calc.isDeposit(a.account_type) && !Calc.isBond(a.account_type));
-  const brokerName = (a) => String(a.sheet_broker || a.platform || '').trim();
+  // Numele contului în coloana Broker: cel salvat; altfel unul implicit, identic pe orice dispozitiv
+  // (două conturi cu aceeași platformă → „XTB (USD)” / „XTB (EUR)”), ca potrivirea să nu depindă de un câmp lipsă.
+  const defaultBrokerName = (a) => {
+    const same = holdingsAccounts().filter((x) => brokerKey(x.platform) === brokerKey(a.platform));
+    if (same.length < 2) return String(a.platform || 'Cont').trim();
+    return `${a.platform} (${[a.currency, Calc.isCrypto(a.account_type) ? 'crypto' : ''].filter(Boolean).join(', ')})`;
+  };
+  const brokerName = (a) => String(a.sheet_broker || defaultBrokerName(a) || '').trim();
   const brokerKey = (v) => String(v || '').trim().toLowerCase();
   const sheetUrl = (id) => `https://docs.google.com/spreadsheets/d/${encodeURIComponent(id)}/edit`;
   const fmtQty = (q) => (masked() ? '••' : Calc.num(q).toLocaleString('ro-RO', { maximumFractionDigits: 6 }));

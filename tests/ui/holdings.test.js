@@ -133,3 +133,18 @@ test('siguranță: dacă numele brokerului din sheet nu se mai potrivește, deț
   assert.ok(app.text().includes('XTB EUR'), 'avertisment cu numele nepotrivit');
 });
 
+test('două conturi la același broker fără „Nume în sheet” salvat: potrivire după numele implicit (ex. XTB (USD))', async () => {
+  const drive = createDrive();
+  const data = makeFamily();
+  data.metadata.holdings_sheet = { id: 'S4', name: 'Dețineri' };
+  data.investment_accounts.push({ id: 'inv_xtb_usd', platform: 'XTB', account_type: 'Acțiuni', total_value: 0, currency: 'USD', notes: '', splits: [{ member_id: 'm_a', percentage: 100 }] });
+  drive.st.sheets.set('S4', { values: [['XTB (USD)', 'NYSE:KO', 10, 60, 'USD', 70], ['XTB (EUR)', 'ETR:SAP', 2, 100, 'EUR', 150]] });
+  const app = await boot({ data, drive, settings: connected });
+  await app.nav('settings'); app.click(app.q('[data-action="holdingsRead"]')); await wait(300);
+  assert.equal(acc(app, 'inv_xtb_usd').total_value, 700);
+  assert.equal(acc(app, 'inv_xtb').total_value, 300);
+  await app.nav('investments');
+  const cards = app.qa('#app article.card').filter((a) => a.querySelector('h3').textContent === 'XTB');
+  assert.ok(cards.some((c) => c.textContent.includes('În sheet: XTB (USD)')) && cards.some((c) => c.textContent.includes('În sheet: XTB (EUR)')), 'numele din sheet apare pe card');
+});
+
