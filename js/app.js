@@ -5,7 +5,7 @@
   /* ======================================================================
      CONFIGURARE
      ====================================================================== */
-  const APP_VERSION = 'v42'; // = CACHE din sw.js
+  const APP_VERSION = 'v43'; // = CACHE din sw.js
   const CONFIG = {
     // Opțional: pune aici OAuth Client ID-ul ca să nu-l introduci manual pe fiecare dispozitiv.
     // Ex: '1234567890-abc.apps.googleusercontent.com'
@@ -1246,13 +1246,14 @@
   }
 
   // Bara de jos (telefon): secțiunile principale + „Mai mult”. Pe ecrane mari: tab-urile de sus.
-  const BOTTOM_ADMIN = ['dashboard', 'portfolio', 'update', 'investments'];
+  const BOTTOM_ADMIN = ['dashboard', 'investments', 'analysis', 'children'];
+  const BOTTOM_LABEL = { analysis: 'Analiză' }; // etichete scurte pentru bara de jos
 
   function renderShell(content) {
     const me = currentMember();
     const nav = isAdmin() ? NAV_ADMIN : NAV_VIEWER;
     const bottomIds = isAdmin() ? BOTTOM_ADMIN : nav.map((n) => n.id);
-    const bottom = nav.filter((n) => bottomIds.includes(n.id));
+    const bottom = bottomIds.map((id) => nav.find((n) => n.id === id)).filter(Boolean); // în ordinea din bara de jos
     const more = nav.filter((n) => !bottomIds.includes(n.id));
     const inMore = more.some((n) => n.id === state.view);
     const tab = (n) => `<button data-action="nav" data-view="${n.id}" class="tab ${state.view === n.id ? 'tab-active' : ''}" ${state.view === n.id ? 'aria-current="page"' : ''}><span aria-hidden="true">${n.icon}</span> ${n.label}</button>`;
@@ -1292,7 +1293,7 @@
       ${content}</main>
     <nav class="bottom-nav md:hidden no-print" aria-label="Navigare" style="grid-template-columns:repeat(${bottom.length + (more.length ? 1 : 0)},minmax(0,1fr))">
       ${bottom.map((n) => `<button data-action="nav" data-view="${n.id}" class="bottom-item ${state.view === n.id ? 'bottom-active' : ''}" ${state.view === n.id ? 'aria-current="page"' : ''}>
-        <span class="text-lg leading-none" aria-hidden="true">${n.icon}</span><span class="truncate max-w-full">${n.label}</span></button>`).join('')}
+        <span class="text-lg leading-none" aria-hidden="true">${n.icon}</span><span class="truncate max-w-full">${BOTTOM_LABEL[n.id] || n.label}</span></button>`).join('')}
       ${more.length ? `<button data-action="toggleMore" class="bottom-item ${inMore || state.moreOpen ? 'bottom-active' : ''}" aria-expanded="${!!state.moreOpen}">
         <span class="text-lg leading-none" aria-hidden="true">⋯</span><span>${inMore ? esc((more.find((n) => n.id === state.view) || {}).label || 'Mai mult') : 'Mai mult'}</span></button>` : ''}
     </nav>
