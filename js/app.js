@@ -2410,9 +2410,15 @@
   function renderPortfolio() {
     const P = portfolioData();
     if (!P.items.length) {
+      const familyHas = holdingsAccounts().some((a) => (a.holdings || []).length);
+      const msg = mineOnly() && familyHas
+        ? `<p class="mt-2 text-slate-600">Nu ai acțiuni în conturile tale de broker. Acțiunile familiei sunt în conturile altor membri.</p>
+           <button data-action="toggleMine" class="btn-primary mt-4">👪 Arată tot portofoliul familiei</button>`
+        : `<p class="mt-2 text-slate-600">Încă nu există dețineri. Ele vin din sheet-ul Google cu acțiunile${M().holdings_sheet ? ' (citit pe dispozitivul care are acces la el și sincronizat apoi)' : ''}.</p>
+           ${settings.driveConnected && !M().holdings_sheet ? '' : `<p class="text-sm text-slate-500 mt-1">${settings.lastSync ? `Ultima sincronizare: ${esc(new Date(settings.lastSync).toLocaleString('ro-RO'))}` : 'Acest dispozitiv nu s-a sincronizat încă.'}</p>`}
+           ${isAdmin() ? `<div class="flex flex-wrap justify-center gap-2 mt-4">${settings.driveConnected ? '<button data-action="syncNow" class="btn-secondary">↻ Sincronizează acum</button>' : ''}<button data-action="nav" data-view="settings" class="btn-primary">⚙️ Setări → Dețineri</button></div>` : ''}`;
       return sectionHeader('Portofoliu de acțiuni', 'Toate acțiunile de la toți brokerii, într-un singur loc') +
-        `<div class="card text-center py-10"><p class="text-4xl">📊</p><p class="mt-2 text-slate-600">Încă nu există dețineri. Ele vin din sheet-ul Google cu acțiunile tale.</p>
-          ${isAdmin() ? '<button data-action="nav" data-view="settings" class="btn-primary mt-4">⚙️ Setări → Dețineri</button>' : ''}</div>`;
+        `<div class="card text-center py-10"><p class="text-4xl">📊</p>${msg}</div>`;
     }
     const srt = Object.assign({ key: 'value', dir: 'desc' }, settings.portfolioSort || {});
     const keyOf = { symbol: (i) => i.symbol, qty: (i) => i.qty, avg: (i) => i.avg, price: (i) => i.price, value: (i) => i.bValue, profit: (i) => i.bProfit, pct: (i) => i.pct, weight: (i) => i.weight };

@@ -104,3 +104,13 @@ test('„Pe broker”: o felie pe cont, fără gri; costul simbolurilor fără p
   assert.ok(profit.textContent.replace(/\s/g, ' ').includes('+3.300'), `profit total fără costul BVB:XYZ: ${profit.textContent}`);
 });
 
+test('portofoliu gol din cauza „Ale mele”: mesaj clar și buton pentru tot portofoliul familiei', async () => {
+  const d = withHoldings();
+  d.investment_accounts.find((a) => a.id === 'inv_rev').holdings = []; // Ioana nu are acțiuni
+  const app = await boot({ data: d, profile: 'm_i', settings: { mineOnly: true } });
+  await app.nav('portfolio');
+  assert.ok(app.text().includes('Nu ai acțiuni în conturile tale'), 'mesaj clar');
+  app.click(app.q('#app [data-action="toggleMine"]')); await wait(30);
+  assert.ok(app.text().includes('NASDAQ:TSLA'), 'după buton: portofoliul familiei');
+});
+
