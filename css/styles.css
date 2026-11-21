@@ -149,6 +149,28 @@ button:disabled { cursor: default; }
 .mine-switch.on .mine-track { background: #0f766e; }
 .mine-switch.on .mine-knob { transform: translateX(.8rem); }
 
+/* Antet: butonul de profil și meniul lui */
+.user-btn { display: inline-flex; align-items: center; gap: .4rem; padding: .2rem .45rem .2rem .2rem; border-radius: 999px; border: 1px solid #e2e8f0; background: #fff; font-size: .85rem; font-weight: 600; color: #334155; cursor: pointer; }
+.user-btn:hover, .user-btn-open { background: #f1f5f9; }
+.user-menu { position: absolute; right: 0; top: calc(100% + .4rem); width: 16rem; max-width: calc(100vw - 1.5rem); background: #fff; border: 1px solid #e2e8f0; border-radius: .9rem; box-shadow: 0 16px 40px rgba(15, 23, 42, .18); padding-bottom: .3rem; z-index: 50; }
+.user-menu.hidden { display: none; }
+.menu-item { width: 100%; display: flex; align-items: center; gap: .6rem; padding: .6rem .75rem; font-size: .9rem; color: #1e293b; cursor: pointer; }
+button.menu-item:hover { background: #f1f5f9; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+/* Bara de navigare de jos (telefon) + panoul „Mai mult” */
+.bottom-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 35; display: grid; background: rgba(255, 255, 255, .96); backdrop-filter: blur(8px);
+  border-top: 1px solid #e2e8f0; padding: .3rem .25rem calc(.3rem + env(safe-area-inset-bottom)); }
+.bottom-item { display: flex; flex-direction: column; align-items: center; gap: .15rem; padding: .3rem .2rem; border-radius: .6rem; font-size: .68rem; font-weight: 600; color: #64748b; min-width: 0; cursor: pointer; }
+.bottom-active { color: #0f766e; background: #f0fdfa; }
+.more-backdrop { position: fixed; inset: 0; z-index: 36; background: rgba(15, 23, 42, .35); }
+.more-sheet { position: fixed; left: .5rem; right: .5rem; bottom: calc(4.2rem + env(safe-area-inset-bottom)); z-index: 37; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .4rem;
+  background: #fff; border: 1px solid #e2e8f0; border-radius: 1rem; padding: .6rem; box-shadow: 0 -10px 40px rgba(15, 23, 42, .2); animation: up .18s ease-out; }
+.more-item { display: flex; flex-direction: column; align-items: center; gap: .3rem; padding: .7rem .3rem; border-radius: .75rem; font-size: .78rem; font-weight: 600; color: #334155; text-align: center; cursor: pointer; }
+.more-item:hover { background: #f1f5f9; }
+.more-active { background: #f0fdfa; color: #0f766e; }
+@media print { .bottom-nav, .more-sheet, .more-backdrop { display: none !important; } }
+
 /* ===== Mod întunecat — ales explicit (data-theme="dark") sau automat după sistem. Doar pe ecran: tipărirea rămâne luminoasă. ===== */
 @media screen {
   :root[data-theme="dark"] { color-scheme: dark; }
@@ -227,6 +249,13 @@ button:disabled { cursor: default; }
   :root[data-theme="dark"] svg text[fill="#64748b"] { fill: #94a3b8; }
   :root[data-theme="dark"] svg circle[fill="#fff"] { fill: #111a2b; }
   :root[data-theme="dark"] .pie-wrap path[stroke="#fff"] { stroke: #111a2b; }
+  :root[data-theme="dark"] .user-btn { background: #172235; border-color: #334155; color: #e2e8f0; }
+  :root[data-theme="dark"] .user-btn:hover, :root[data-theme="dark"] .user-btn-open, :root[data-theme="dark"] button.menu-item:hover, :root[data-theme="dark"] .more-item:hover { background: #1e2a3f; }
+  :root[data-theme="dark"] .user-menu, :root[data-theme="dark"] .more-sheet { background: #111a2b; border-color: #26324a; box-shadow: 0 16px 40px rgba(0, 0, 0, .5); }
+  :root[data-theme="dark"] .menu-item, :root[data-theme="dark"] .more-item { color: #e2e8f0; }
+  :root[data-theme="dark"] .bottom-nav { background: rgba(11, 18, 32, .96); border-top-color: #26324a; }
+  :root[data-theme="dark"] .bottom-item { color: #94a3b8; }
+  :root[data-theme="dark"] .bottom-active, :root[data-theme="dark"] .more-active { color: #5eead4; background: rgba(20, 184, 166, .12); }
 }
 @media screen and (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) { color-scheme: dark; }
@@ -305,4 +334,11 @@ button:disabled { cursor: default; }
   :root:not([data-theme="light"]) svg text[fill="#64748b"] { fill: #94a3b8; }
   :root:not([data-theme="light"]) svg circle[fill="#fff"] { fill: #111a2b; }
   :root:not([data-theme="light"]) .pie-wrap path[stroke="#fff"] { stroke: #111a2b; }
+  :root:not([data-theme="light"]) .user-btn { background: #172235; border-color: #334155; color: #e2e8f0; }
+  :root:not([data-theme="light"]) .user-btn:hover, :root:not([data-theme="light"]) .user-btn-open, :root:not([data-theme="light"]) button.menu-item:hover, :root:not([data-theme="light"]) .more-item:hover { background: #1e2a3f; }
+  :root:not([data-theme="light"]) .user-menu, :root:not([data-theme="light"]) .more-sheet { background: #111a2b; border-color: #26324a; box-shadow: 0 16px 40px rgba(0, 0, 0, .5); }
+  :root:not([data-theme="light"]) .menu-item, :root:not([data-theme="light"]) .more-item { color: #e2e8f0; }
+  :root:not([data-theme="light"]) .bottom-nav { background: rgba(11, 18, 32, .96); border-top-color: #26324a; }
+  :root:not([data-theme="light"]) .bottom-item { color: #94a3b8; }
+  :root:not([data-theme="light"]) .bottom-active, :root:not([data-theme="light"]) .more-active { color: #5eead4; background: rgba(20, 184, 166, .12); }
 }

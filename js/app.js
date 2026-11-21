@@ -1242,34 +1242,61 @@
     </div>`;
   }
 
+  // Bara de jos (telefon): secțiunile principale + „Mai mult”. Pe ecrane mari: tab-urile de sus.
+  const BOTTOM_ADMIN = ['dashboard', 'portfolio', 'update', 'investments'];
+
   function renderShell(content) {
     const me = currentMember();
     const nav = isAdmin() ? NAV_ADMIN : NAV_VIEWER;
+    const bottomIds = isAdmin() ? BOTTOM_ADMIN : nav.map((n) => n.id);
+    const bottom = nav.filter((n) => bottomIds.includes(n.id));
+    const more = nav.filter((n) => !bottomIds.includes(n.id));
+    const inMore = more.some((n) => n.id === state.view);
+    const tab = (n) => `<button data-action="nav" data-view="${n.id}" class="tab ${state.view === n.id ? 'tab-active' : ''}" ${state.view === n.id ? 'aria-current="page"' : ''}><span aria-hidden="true">${n.icon}</span> ${n.label}</button>`;
+    const menuItem = (attrs, icon, label, extra = '') => `<button ${attrs} class="menu-item" role="menuitem"><span class="w-6 text-center" aria-hidden="true">${icon}</span><span class="flex-1 text-left">${label}</span>${extra}</button>`;
+    const open = !!state.userMenu;
     return `<header class="sticky top-0 z-30 bg-white/90 backdrop-blur border-b border-slate-200 no-print">
-      <div class="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
-        <img src="icons/icon.svg" class="w-9 h-9" alt="">
+      <div class="max-w-6xl mx-auto px-3 sm:px-4 py-2.5 flex items-center gap-2">
+        <img src="icons/icon.svg" class="w-8 h-8 shrink-0" alt="">
         <div class="flex-1 min-w-0">
           <h1 class="font-semibold leading-tight truncate">Patrimoniu Familial</h1>
-          <p class="text-xs text-slate-500 truncate">${esc(me.name)} · ${ROLE_LABELS[me.role]}</p>
+          <p class="text-xs text-slate-500 truncate">${esc(me.name)} · ${ROLE_LABELS[me.role]}${mineOnly() ? ' · doar ale mele' : ''}</p>
         </div>
-        <button data-action="toggleMask" class="btn-ghost btn-sm" aria-pressed="${masked()}" title="${masked() ? 'Arată sumele' : 'Ascunde sumele'}" aria-label="${masked() ? 'Arată sumele' : 'Ascunde sumele'}">${masked() ? '🙈' : '👁'}</button>
-        <div id="sync-badge">${syncBadgeHtml()}</div>
-        ${FWVault.enabled() ? '<button data-action="lockNow" class="btn-ghost btn-sm" title="Blochează (cere parola familiei)" aria-label="Blochează">🔒</button>' : ''}
-        ${isAdmin()
-          ? `<button data-action="toggleMine" role="switch" aria-checked="${mineOnly()}" class="mine-switch ${mineOnly() ? 'on' : ''}" title="${mineOnly() ? 'Arată toată familia' : 'Arată doar activele mele'}"><span class="mine-track"><span class="mine-knob"></span></span><span>Ale mele</span></button>`
-          : `<button data-action="ownPassword" class="btn-ghost btn-sm" title="${me.auth ? 'Schimbă parola' : 'Setează o parolă'}" aria-label="Parola mea">🔑</button>`}
-        ${isAdmin() ? `<button data-action="nav" data-view="settings" class="btn-ghost btn-sm ${state.view === 'settings' ? 'text-teal-700' : ''}" title="Setări" aria-label="Setări">⚙️</button>` : ''}
-        <button data-action="switchProfile" class="btn-secondary btn-sm" title="Schimbă profilul">${avatar(me, 'w-6 h-6 text-xs')}<span class="hidden sm:inline">Schimbă</span></button>
+        <button data-action="toggleMask" class="btn-ghost btn-sm shrink-0" aria-pressed="${masked()}" title="${masked() ? 'Arată sumele' : 'Ascunde sumele'}" aria-label="${masked() ? 'Arată sumele' : 'Ascunde sumele'}">${masked() ? '🙈' : '👁'}</button>
+        <div id="sync-badge" class="shrink-0">${syncBadgeHtml()}</div>
+        <div class="relative shrink-0">
+          <button data-action="toggleUserMenu" class="user-btn ${open ? 'user-btn-open' : ''}" aria-haspopup="menu" aria-expanded="${open}" title="${esc(me.name)}">
+            ${avatar(me, 'w-7 h-7 text-xs')}<span class="hidden sm:inline max-w-[8rem] truncate">${esc(me.name)}</span><span class="text-xs text-slate-500" aria-hidden="true">▾</span></button>
+          <div class="user-menu ${open ? '' : 'hidden'}" role="menu" aria-label="Contul meu">
+            <div class="flex items-center gap-3 px-3 py-2.5 border-b border-slate-100">${avatar(me, 'w-9 h-9 text-sm')}
+              <div class="min-w-0"><p class="font-semibold truncate">${esc(me.name)}</p><p class="text-xs text-slate-500">${ROLE_LABELS[me.role]}</p></div></div>
+            ${isAdmin() ? `<div class="menu-item"><span class="w-6 text-center" aria-hidden="true">👤</span><span class="flex-1">Doar ale mele</span>
+              <button data-action="toggleMine" role="switch" aria-checked="${mineOnly()}" class="mine-switch ${mineOnly() ? 'on' : ''}" title="${mineOnly() ? 'Arată toată familia' : 'Arată doar activele mele'}"><span class="mine-track"><span class="mine-knob"></span></span><span class="sr-only">Ale mele</span></button></div>` : ''}
+            ${menuItem('data-action="toggleMask"', masked() ? '🙈' : '👁', masked() ? 'Arată sumele' : 'Ascunde sumele')}
+            ${isAdmin() ? menuItem(`data-action="nav" data-view="settings"`, '⚙️', 'Setări') : menuItem(`data-action="ownPassword"`, '🔑', me.auth ? 'Schimbă parola mea' : 'Setează o parolă')}
+            ${FWVault.enabled() ? menuItem('data-action="lockNow"', '🔒', 'Blochează acum') : ''}
+            ${menuItem('data-action="switchProfile"', '↔️', 'Schimbă profilul')}
+          </div>
+        </div>
       </div>
-      <nav class="max-w-6xl mx-auto px-2 flex items-center gap-1 overflow-x-auto no-scrollbar lg:flex-wrap lg:overflow-visible" aria-label="Module">
-        ${nav.map((n) => `<button data-action="nav" data-view="${n.id}" class="tab ${state.view === n.id ? 'tab-active' : ''}" ${state.view === n.id ? 'aria-current="page"' : ''}><span aria-hidden="true">${n.icon}</span> ${n.label}</button>`).join('')}
-      </nav>
+      <nav class="hidden md:flex max-w-6xl mx-auto px-2 items-center gap-1 flex-wrap" aria-label="Module">${nav.map(tab).join('')}</nav>
     </header>
-    <main class="max-w-6xl mx-auto px-4 py-6 pb-24">
+    <main class="max-w-6xl mx-auto px-4 py-5 md:py-6 pb-28 md:pb-10">
       ${mineOnly() ? `<div class="mine-banner no-print">👤 Afișezi doar activele tale (<strong>${esc(me.name)}</strong>) și partea ta din cele comune.
         <button data-action="toggleMine" class="underline font-medium">Arată toată familia</button></div>` : ''}
-      ${content}</main>`;
+      ${content}</main>
+    <nav class="bottom-nav md:hidden no-print" aria-label="Navigare" style="grid-template-columns:repeat(${bottom.length + (more.length ? 1 : 0)},minmax(0,1fr))">
+      ${bottom.map((n) => `<button data-action="nav" data-view="${n.id}" class="bottom-item ${state.view === n.id ? 'bottom-active' : ''}" ${state.view === n.id ? 'aria-current="page"' : ''}>
+        <span class="text-lg leading-none" aria-hidden="true">${n.icon}</span><span class="truncate max-w-full">${n.label}</span></button>`).join('')}
+      ${more.length ? `<button data-action="toggleMore" class="bottom-item ${inMore || state.moreOpen ? 'bottom-active' : ''}" aria-expanded="${!!state.moreOpen}">
+        <span class="text-lg leading-none" aria-hidden="true">⋯</span><span>${inMore ? esc((more.find((n) => n.id === state.view) || {}).label || 'Mai mult') : 'Mai mult'}</span></button>` : ''}
+    </nav>
+    ${state.moreOpen && more.length ? `<div class="more-backdrop md:hidden" data-action="closeMenus"></div>
+      <div class="more-sheet md:hidden no-print" role="dialog" aria-label="Mai multe secțiuni">
+        ${more.map((n) => `<button data-action="nav" data-view="${n.id}" class="more-item ${state.view === n.id ? 'more-active' : ''}"><span class="text-2xl" aria-hidden="true">${n.icon}</span><span>${n.label}</span></button>`).join('')}
+      </div>` : ''}`;
   }
+
 
   /* ---------- Dashboard ---------- */
   function alertsHtml(adminView) {
@@ -3048,6 +3075,7 @@
      ====================================================================== */
   function setProfile(id) {
     state.profileId = id;
+    state.userMenu = false; state.moreOpen = false;
     try { id ? localStorage.setItem(LS.PROFILE, id) : localStorage.removeItem(LS.PROFILE); } catch (e) { /* ignore */ }
     const m = member(id);
     ssSet(SS_UNLOCK, m ? id : null);
@@ -3183,7 +3211,10 @@
   }
 
   const actions = {
-    nav: (ds) => { state.view = ds.view; window.scrollTo(0, 0); render(); },
+    nav: (ds) => { state.view = ds.view; state.userMenu = false; state.moreOpen = false; window.scrollTo(0, 0); render(); },
+    toggleUserMenu: () => { state.userMenu = !state.userMenu; state.moreOpen = false; render(); },
+    toggleMore: () => { state.moreOpen = !state.moreOpen; state.userMenu = false; render(); },
+    closeMenus: () => { state.userMenu = false; state.moreOpen = false; render(); },
     'nav-settings': () => { if (isAdmin()) { state.view = 'settings'; render(); } },
     add: (ds) => openForm(ds.collection),
     addChildInvestment: (ds) => { if (isAdmin()) openChildInvestmentPicker(ds.id); },
@@ -3417,6 +3448,10 @@
      EVENIMENTE
      ====================================================================== */
   document.addEventListener('click', (e) => {
+    if ((state.userMenu || state.moreOpen) && !e.target.closest('.user-menu, .more-sheet, [data-action="toggleUserMenu"], [data-action="toggleMore"]')) {
+      state.userMenu = false; state.moreOpen = false;
+      if (!e.target.closest('[data-action]')) { render(); return; }
+    }
     const el = e.target.closest('[data-action]');
     if (!el || el.disabled) return;
     const fn = actions[el.dataset.action];
@@ -3530,7 +3565,10 @@
     }
   }, true);
 
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.modal && !e.defaultPrevented) actions.closeModal(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !state.modal && (state.userMenu || state.moreOpen)) { state.userMenu = false; state.moreOpen = false; render(); return; }
+    if (e.key === 'Escape' && state.modal && !e.defaultPrevented) actions.closeModal();
+  });
 
   /* Tooltip la hover pentru orice element cu data-tip (bare, segmente, celule) */
   const tip = document.createElement('div');
