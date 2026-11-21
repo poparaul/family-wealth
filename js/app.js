@@ -382,7 +382,7 @@
           .filter((k) => !['updated_at', 'balance_history'].includes(k) && FWMerge.stable(b[k]) !== FWMerge.stable(x[k]));
         if (fields.length) entries.push({ action: 'edit', collection: c, label: logLabel(c, x), detail: fields.slice(0, 4).map((k) => fieldChange(k, b[k], x[k])).join('; ') });
       });
-      B.forEach((x, id) => { if (!A.has(id)) entries.push({ action: 'delete', collection: c, label: logLabel(c, x) }); });
+      B.forEach((x, id) => { if (!A.has(id)) entries.push({ action: 'delete', collection: c, label: logLabel(c, x), record: JSON.parse(JSON.stringify(x)) }); });
     });
     const br = before.metadata && before.metadata.exchange_rates, ar = after.metadata && after.metadata.exchange_rates;
     if (FWMerge.stable(br) !== FWMerge.stable(ar)) entries.push({ action: 'edit', collection: 'rates', label: 'Cursuri valutare', detail: Object.entries(ar || {}).map(([k, v]) => `${k} ${v}`).join(', ') });
@@ -401,7 +401,9 @@
     return `<ul class="space-y-2.5 text-sm">${list.map((e) => `<li class="flex gap-2"><span aria-hidden="true">${icon[e.action] || '•'}</span>
       <div class="min-w-0"><p><strong>${esc(e.by)}</strong> · ${e.action === 'add' ? 'a adăugat' : e.action === 'delete' ? 'a șters' : 'a modificat'} ${esc((COL_LABEL[e.collection] || '').toLowerCase())} <span class="font-medium">${esc(e.label)}</span></p>
         ${e.detail ? `<p class="text-xs text-slate-500 break-words">${masked() ? '••••' : esc(e.detail)}</p>` : ''}
-        <p class="text-xs text-slate-400">${esc(new Date(e.at).toLocaleString('ro-RO'))}</p></div></li>`).join('')}</ul>`;
+        <p class="text-xs text-slate-400">${esc(new Date(e.at).toLocaleString('ro-RO'))}
+          ${e.action === 'delete' && e.record && isAdmin() && D()[e.collection] && !D()[e.collection].some((x) => x.id === e.record.id)
+            ? ` · <button data-action="restoreDeleted" data-id="${esc(e.id)}" class="text-teal-700 font-medium underline">↩ Restaurează</button>` : ''}</p></div></li>`).join('')}</ul>`;
   }
 
   function commit(mutator, msg, opts = {}) {
@@ -2525,7 +2527,7 @@
     if (!apiKey()) { toast('Lipsește cheia Google API.', 'error'); return; }
     try {
       if (!(await ensureFileScope())) return;
-      const f = await DriveSync.pickFile({ apiKey: apiKey(), appId: clientId().split('-')[0], mimeTypes: SHEET_MIME, title: 'Alege sheet-ul cu deținerile' });
+      const f = await DriveSync.pickFile({ apiKey: apiKey(), appId: clientId().split('-')[0], mimeTypes: SHEET_MIME, title: 'Alege sheet-ul cu deținerile', mineFirst: true });
       if (!f) return;
       commit((d) => { d.metadata.holdings_sheet = { id: f.id, name: f.name }; }, null);
       await readHoldings({ manual: true });
@@ -2566,6 +2568,7 @@
     accs.forEach((a) => {
       const g = groups.get(brokerKey(brokerName(a)));
       if (!g && !(a.holdings || []).length) return; // contul nu folosește sheet-ul
+      if (!g && unmatched.length) return; // nume de broker nepotrivit în sheet → nu golim deținerile existente (vezi avertismentul)
       const holdings = (g ? g.items : []).map((h) => {
         const currency = h.currency || a.currency;
         return { symbol: h.symbol, qty: h.qty, avg: h.avg, price: h.price, currency,
@@ -2855,6 +2858,10 @@
         <div class="flex flex-wrap gap-2 mt-3">
           <button data-action="connectDrive" class="btn-primary">${settings.driveConnected ? '🔄 Reconectează & sincronizează' : '🔗 Conectează Google Drive'}</button>
           ${settings.driveConnected ? `<button data-action="syncNow" class="btn-secondary">Sincronizează acum</button><button data-action="switchDriveAccount" class="btn-secondary">👤 Schimbă contul Google</button><button data-action="disconnectDrive" class="btn-ghost text-rose-600">Deconectează</button>` : ''}
+        </div>
+        <div class="flex flex-wrap items-center gap-2 mt-2">
+          ${settings.driveConnected ? `<button data-action="forcePush" class="btn-ghost btn-sm">⬆ Trimite datele de aici în Drive (suprascrie)</button>
+            <span class="text-xs text-slate-500">Când alt dispozitiv are date greșite: datele de pe acest dispozitiv devin versiunea din Drive, iar celelalte le preiau.</span>` : ''}
         </div>
         ${sharedSectionHtml()}
         <details class="mt-4 text-sm text-slate-600"><summary class="cursor-pointer font-medium">Cum obțin un Client ID?</summary>
@@ -3197,6 +3204,31 @@
     sharedShare: () => sharedShareForm(),
     sharedAccess: () => sharedAccess(),
     sharedLeave: () => sharedLeave(),
+    restoreDeleted: (ds) => {
+      const e = (D().changelog || []).find((x) => x.id === ds.id);
+      if (!e || !e.record || !isAdmin()) return;
+      if (D()[e.collection].some((x) => x.id === e.record.id)) { toast('Contul există deja.', 'info'); return; }
+      commit((d) => { d[e.collection].push(JSON.parse(JSON.stringify(e.record))); }, `„${e.label}” a fost restaurat.`);
+    },
+    forcePush: async () => {
+      if (!(await confirmDialog('Suprascrie datele din Drive',
+        'Datele de pe ACEST dispozitiv devin versiunea din Google Drive. Celelalte dispozitive le vor prelua la următoarea sincronizare, iar modificările făcute doar pe ele și nesincronizate se pierd. Folosește-l când un dispozitiv are date greșite (ex. conturi șterse din greșeală).', 'Suprascrie Drive-ul'))) return;
+      try {
+        if (!DriveSync.hasValidToken()) { await DriveSync.connect(clientId(), { hint: settings.driveEmail }); }
+        setSync('syncing', 'Se trimit datele…');
+        M().last_updated = new Date().toISOString();
+        saveData(D());
+        await DriveSync.push(D(), { allowPlain: !!settings.allowPlainPush });
+        pendingPush = false;
+        saveBase(D());
+        settings.lastSync = new Date().toISOString(); saveSettings();
+        setSync('synced');
+        toast('Drive-ul conține acum datele de pe acest dispozitiv. Pe celelalte dispozitive apasă „Sincronizează acum”.', 'success', 7000);
+      } catch (e) {
+        if (e.code === 'NEED_PASSWORD') { askVaultPassword(e.envelope, () => actions.forcePush()); return; }
+        setSync('error', e.message); toast(e.message, 'error');
+      }
+    },
     connectDrive: () => connectDrive(),
     switchDriveAccount: async () => {
       if (await confirmDialog('Schimbă contul Google', 'Alegi alt cont Google. Datele de pe acest dispozitiv vor fi înlocuite cu cele din Drive-ul contului ales (dacă există acolo).', 'Alege contul')) {

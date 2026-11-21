@@ -111,3 +111,44 @@ test('temă: întunecat / luminos / automat + paleta graficelor', async () => {
   assert.equal(app.doc.documentElement.getAttribute('data-theme'), null);
   assert.equal(app.w.Calc.CATEGORIES.investment_accounts.color, light);
 });
+
+test('conturi șterse din greșeală pe telefon: „Trimite datele de aici” de pe web le aduce înapoi', async () => {
+  const drive = createDrive();
+  const data = makeFamily();
+  drive.put(data);
+  const webLocal = new Map(), phoneLocal = new Map();
+  // telefonul șterge contul XTB și sincronizează → ștergerea ajunge în Drive
+  let phone = await boot({ data, drive, settings: connected, base: data, local: phoneLocal });
+  await wait(600);
+  await phone.nav('investments');
+  const card = phone.qa('#app article.card').find((a) => a.textContent.includes('XTB'));
+  phone.click(card.querySelector('[data-action="delete"]')); await phone.confirm(); await wait(2500);
+  assert.ok(!drive.json(drive.appFile().id).investment_accounts.some((a) => a.id === 'inv_xtb'), 'ștergerea a ajuns în Drive');
+  // web: are încă XTB → suprascrie Drive-ul
+  // web: pornit fără sincronizarea automată (ca atunci când accesul Google a expirat) — are încă XTB
+  const web = await boot({ data, drive, settings: connected, token: true, local: webLocal, online: false });
+  web.w.navigator.onLine = true;
+  await web.nav('settings');
+  web.click(web.q('[data-action="forcePush"]')); await web.confirm(); await wait(800);
+  assert.ok(drive.json(drive.appFile().id).investment_accounts.some((a) => a.id === 'inv_xtb'), 'Drive-ul are din nou XTB');
+  // telefonul sincronizează → primește XTB înapoi
+  phone = await boot({ drive, settings: connected, local: phoneLocal });
+  await wait(1500);
+  assert.ok(phone.stored().investment_accounts.some((a) => a.id === 'inv_xtb'), 'telefonul a primit XTB înapoi');
+  assert.equal(phone.errors.length + web.errors.length, 0, phone.errors.concat(web.errors).join('; '));
+});
+
+test('jurnal: un cont șters se poate restaura cu un click', async () => {
+  const app = await boot({ data: makeFamily() });
+  await app.nav('investments');
+  const card = app.qa('#app article.card').find((a) => a.textContent.includes('XTB'));
+  app.click(card.querySelector('[data-action="delete"]')); await app.confirm(); await wait(50);
+  assert.ok(!app.stored().investment_accounts.some((a) => a.id === 'inv_xtb'));
+  await app.nav('settings');
+  app.click(app.q('[data-action="restoreDeleted"]')); await wait(50);
+  const x = app.stored().investment_accounts.find((a) => a.id === 'inv_xtb');
+  assert.ok(x && x.total_value === 200, 'restaurat identic (același id)');
+  await app.nav('settings');
+  assert.ok(!app.q('[data-action="restoreDeleted"]'), 'butonul dispare după restaurare');
+});
+

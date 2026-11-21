@@ -116,3 +116,20 @@ test('analiză: tabelul membri × categorii e sortabil', async () => {
   assert.ok(app.q('th[aria-sort="descending"] [data-value="total"]'), 'după total, descrescător');
 });
 
+test('siguranță: dacă numele brokerului din sheet nu se mai potrivește, deținerile existente NU se golesc', async () => {
+  const drive = createDrive();
+  const data = makeFamily();
+  data.metadata.holdings_sheet = { id: 'S3', name: 'Dețineri' };
+  const x = data.investment_accounts.find((a) => a.id === 'inv_xtb');
+  x.sheet_broker = 'XTB (EUR)';
+  x.holdings = [{ symbol: 'LON:VUSA', qty: 2, avg: 50, price: 60, currency: 'EUR', value: 120, cost: 100 }];
+  x.total_value = 120;
+  drive.st.sheets.set('S3', { values: [['XTB EUR', 'LON:VUSA', 2, 50, 'EUR', 61]] }); // numele scris diferit
+  const app = await boot({ data, drive, settings: connected });
+  await app.nav('settings'); app.click(app.q('[data-action="holdingsRead"]')); await wait(300);
+  const after = app.stored().investment_accounts.find((a) => a.id === 'inv_xtb');
+  assert.equal(after.holdings.length, 1, 'deținerile au rămas');
+  assert.equal(after.total_value, 120);
+  assert.ok(app.text().includes('XTB EUR'), 'avertisment cu numele nepotrivit');
+});
+

@@ -280,7 +280,7 @@
   }
 
   /** Deschide selectorul; întoarce { id, name } sau null dacă utilizatorul renunță. */
-  async function pickFile({ apiKey, appId, mimeTypes = 'application/json', title = 'Alege fișierul cu datele familiei' }) {
+  async function pickFile({ apiKey, appId, mimeTypes = 'application/json', title = 'Alege fișierul cu datele familiei', mineFirst = false }) {
     if (!hasValidToken()) throw new DriveError('Conectează-te întâi la Google Drive.', 401);
     if (!fileScope) throw new DriveError('Reconectează Google Drive și acceptă permisiunea pentru fișierele folosite cu aplicația.', 401);
     if (!apiKey) throw new DriveError('Lipsește cheia Google API (vezi Setări).');
@@ -289,7 +289,7 @@
       const shared = new google.picker.DocsView(google.picker.ViewId.DOCS).setOwnedByMe(false).setMimeTypes(mimeTypes).setMode(google.picker.DocsViewMode.LIST);
       const mine = new google.picker.DocsView(google.picker.ViewId.DOCS).setOwnedByMe(true).setMimeTypes(mimeTypes).setMode(google.picker.DocsViewMode.LIST);
       const picker = new google.picker.PickerBuilder()
-        .addView(shared).addView(mine)
+        .addView(mineFirst ? mine : shared).addView(mineFirst ? shared : mine) // primul tab = cel unde e cel mai probabil fișierul
         .setOAuthToken(token).setDeveloperKey(apiKey).setAppId(appId)
         .setTitle(title).setLocale('ro')
         .setCallback((d) => {

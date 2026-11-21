@@ -95,7 +95,7 @@ function createDrive({ email = 'andrei@example.com', rates = { RON: 5.1, USD: 1.
 }
 
 /** Pornește aplicația. `local`/`session` permit „reîncărcarea” aceluiași dispozitiv. */
-async function boot({ data, profile = 'm_a', settings, drive, token = !!drive, local = new Map(), session = new Map(), base } = {}) {
+async function boot({ data, profile = 'm_a', settings, drive, token = !!drive, local = new Map(), session = new Map(), base, online = true } = {}) {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8').replace(/<script src="[^"]+"><\/script>/g, '');
   const virtualConsole = new VirtualConsole(); // ignoră „Not implemented: navigation” de la descărcări
   const dom = new JSDOM(html, { url: 'https://example.github.io/app/', runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole });
@@ -103,7 +103,7 @@ async function boot({ data, profile = 'm_a', settings, drive, token = !!drive, l
   Object.defineProperty(w, 'localStorage', { value: memStorage(local) });
   Object.defineProperty(w, 'sessionStorage', { value: memStorage(session) });
   Object.defineProperty(w, 'crypto', { value: webcrypto });
-  Object.defineProperty(w.navigator, 'onLine', { value: true, configurable: true });
+  Object.defineProperty(w.navigator, 'onLine', { value: online, configurable: true, writable: true });
   w.TextEncoder = TextEncoder; w.TextDecoder = TextDecoder;
   w.scrollTo = () => {};
   const blobs = [];
