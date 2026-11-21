@@ -152,3 +152,55 @@ test('jurnal: un cont șters se poate restaura cu un click', async () => {
   assert.ok(!app.q('[data-action="restoreDeleted"]'), 'butonul dispare după restaurare');
 });
 
+test('dispozitiv rămas pe folderul privat: găsește fișierul partajat și preia datele comune', async () => {
+  const drive = createDrive();
+  const old = makeFamily();
+  drive.put(old); // folderul privat: date vechi
+  const shared = makeFamily();
+  shared.children_savings.push({ id: 'child_new', child_id: 'm_k', account_type: 'Cont Centenar Trezorerie', current_balance: 1234, currency: 'RON',
+    monthly_contribution: { target_amount: 0, due_day: 1, is_paid_this_month: false }, government_bonus_tracker: { yearly_target: 1200, yearly_deposited: 0 }, balance_history: [] });
+  shared.metadata.last_updated = new Date().toISOString();
+  const sid = drive.put(shared, { name: 'Patrimoniu Familial - date (criptat).json', appdata: false });
+  const app = await boot({ data: old, drive, settings: connected, base: old });
+  await wait(1200);
+  const f = app.modal();
+  assert.ok(f && app.q('#modal-root').textContent.includes('fișierul partajat'), 'întreabă dacă trece pe fișierul partajat');
+  await app.confirm(); await wait(1200);
+  assert.equal(app.settings().driveMode, 'shared');
+  assert.equal(app.settings().sharedFileId, sid);
+  assert.ok(app.stored().children_savings.some((c) => c.id === 'child_new'), 'contul Centenar nou a ajuns pe dispozitiv');
+});
+
+test('refuzul de a trece pe fișierul partajat e ținut minte', async () => {
+  const drive = createDrive();
+  const data = makeFamily();
+  drive.put(data);
+  drive.put(makeFamily(), { name: 'Patrimoniu Familial - date (criptat).json', appdata: false });
+  const local = new Map();
+  let app = await boot({ data, drive, settings: connected, base: data, local });
+  await wait(1200);
+  app.click(app.q('#modal-root [data-action="closeModal"]')); await wait(50);
+  assert.equal(app.settings().sharedOptOut, true);
+  local.set('fw_settings', JSON.stringify(Object.assign(app.settings(), { lastSharedCheck: 0 })));
+  app = await boot({ drive, local });
+  await wait(1200);
+  assert.ok(!app.modal(), 'nu mai întreabă');
+});
+
+test('la crearea fișierului partajat, nota „unde s-au mutat datele” ajunge și în folderul privat', async () => {
+  const drive = createDrive();
+  const data = makeFamily();
+  drive.put(data);
+  const app = await boot({ data, drive, settings: connected, base: data });
+  await wait(800);
+  await app.nav('settings');
+  app.click(app.q('[data-action="vaultEnable"]')); await wait(30);
+  const f = app.modal(); f.pw1.value = 'Parola2026'; f.pw2.value = 'Parola2026'; f.ack.checked = true;
+  app.submit(f); await wait(2500);
+  await app.nav('settings');
+  app.click(app.q('[data-action="sharedCreate"]')); await app.confirm(); await wait(1500);
+  const appFile = JSON.parse(drive.appFile().content);
+  const plain = await app.w.FWVault.decrypt(appFile);
+  assert.ok(plain.metadata.shared_file && plain.metadata.shared_file.id, 'folderul privat conține nota cu fișierul partajat');
+});
+

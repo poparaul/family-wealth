@@ -527,6 +527,7 @@
       setSync('synced');
       render();
       maybeBackup().catch(() => { /* backup-ul nu e esențial */ });
+      setTimeout(() => maybeAdoptShared().catch(() => {}), 400);
     } catch (e) {
       pendingPush = true;
       if (e.code === 'NEED_PASSWORD') { setSync('auth', 'Datele din Drive sunt criptate'); askVaultPassword(e.envelope, () => runSync(opts)); return; }
@@ -2166,8 +2167,13 @@
       if (!(await ensureFileScope())) return;
       setSync('syncing', 'Se creează fișierul…');
       const f = await DriveSync.createSharedFile(D(), SHARED_FILE_NAME);
-      Object.assign(settings, { driveMode: 'shared', sharedFileId: f.id, sharedFileName: f.name, sharedOwner: settings.driveEmail || '' });
-      saveSettings(); applyTarget(); saveBase(D());
+      M().shared_file = { id: f.id, name: f.name, owner: settings.driveEmail || '' };
+      M().last_updated = new Date().toISOString();
+      saveData(D());
+      try { await DriveSync.push(D()); } catch (e) { /* nota din folderul privat nu e esențială */ }
+      Object.assign(settings, { driveMode: 'shared', sharedFileId: f.id, sharedFileName: f.name, sharedOwner: settings.driveEmail || '', sharedOptOut: false });
+      saveSettings(); applyTarget(); saveBase(null);
+      persist(); // urcă și nota în fișierul partajat
       setSync('synced'); render();
       toast('Fișierul partajat a fost creat. Acum dă acces membrilor familiei.', 'success', 6000);
       setTimeout(sharedShareForm, 300);
@@ -2219,15 +2225,41 @@
       if (!(await confirmDialog('Folosește fișierul partajat', `Datele de pe acest dispozitiv vor fi înlocuite cu cele din „${f.name}”, iar de acum aplicația se sincronizează cu acest fișier.`, 'Folosește fișierul'))) return;
       let owner = '';
       try { const meta = await DriveSync.fileMeta(f.id); owner = (meta.owners && meta.owners[0] && (meta.owners[0].emailAddress || meta.owners[0].displayName)) || ''; } catch (e) { /* opțional */ }
-      Object.assign(settings, { driveMode: 'shared', sharedFileId: f.id, sharedFileName: f.name, sharedOwner: owner });
+      Object.assign(settings, { driveMode: 'shared', sharedFileId: f.id, sharedFileName: f.name, sharedOwner: owner, sharedOptOut: false });
       saveSettings(); applyTarget(); saveBase(null);
       await runSync({ preferRemote: true });
     } catch (e) { toast(e.message, 'error', 6000); }
   }
 
+  async function maybeAdoptShared() {
+    if (sharedMode() || settings.sharedOptOut || !settings.driveConnected || !DriveSync.hasValidToken() || state.modal) return;
+    if (Date.now() - (settings.lastSharedCheck || 0) < 6 * 3600e3) return;
+    settings.lastSharedCheck = Date.now(); saveSettings();
+    let target = null;
+    const ptr = M().shared_file;
+    try {
+      if (ptr && ptr.id && DriveSync.hasFileScope()) { const m = await DriveSync.fileMeta(ptr.id); if (m && !m.trashed) target = { id: m.id, name: m.name, owner: ptr.owner || '' }; }
+    } catch (e) { /* fără acces la fișierul notat */ }
+    if (!target && DriveSync.hasFileScope()) {
+      try { const list = await DriveSync.findFilesByName(SHARED_FILE_NAME); if (list[0]) target = { id: list[0].id, name: list[0].name, owner: (list[0].owners && list[0].owners[0] && list[0].owners[0].emailAddress) || '' }; }
+      catch (e) { /* ignore */ }
+    }
+    if (!target) {
+      if (ptr && ptr.id) toast('Datele familiei sunt într-un fișier partajat. Cere acces la el, apoi Setări → Google Drive → „Alege un fișier partajat cu mine”.', 'info', 9000);
+      return;
+    }
+    if (state.modal) return;
+    const ok = await confirmDialog('Datele familiei sunt în fișierul partajat',
+      `Acest dispozitiv se sincronizează încă cu folderul privat, dar datele familiei sunt în „${target.name}”. Treci pe fișierul partajat? Datele de aici vor fi înlocuite cu cele din fișierul comun (exportă-le întâi dacă ai modificări doar pe acest dispozitiv).`, 'Treci pe fișierul partajat');
+    if (!ok) { settings.sharedOptOut = true; saveSettings(); return; }
+    Object.assign(settings, { driveMode: 'shared', sharedFileId: target.id, sharedFileName: target.name, sharedOwner: target.owner, sharedOptOut: false });
+    saveSettings(); applyTarget(); saveBase(null);
+    await runSync({ preferRemote: true });
+  }
+
   async function sharedLeave() {
     if (!(await confirmDialog('Revino la folderul privat', 'Aplicația nu se mai sincronizează cu fișierul partajat (fișierul rămâne în Drive). Datele de pe acest dispozitiv vor fi salvate în folderul privat al contului tău.', 'Revino'))) return;
-    Object.assign(settings, { driveMode: 'appdata', sharedFileId: null, sharedFileName: null, sharedOwner: null });
+    Object.assign(settings, { driveMode: 'appdata', sharedFileId: null, sharedFileName: null, sharedOwner: null, sharedOptOut: true });
     saveSettings(); applyTarget(); saveBase(null);
     render();
     if (settings.driveConnected) persist(); // urcă datele în folderul privat la următoarea sincronizare

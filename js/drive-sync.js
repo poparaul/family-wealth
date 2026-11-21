@@ -255,6 +255,13 @@
     return (await res.json()).permissions || [];
   }
 
+  /** Caută fișierele vizibile cu un anumit nume pe care aplicația le poate accesa (drive.file: create de ea sau alese). */
+  async function findFilesByName(name) {
+    const q = encodeURIComponent(`name='${String(name).replace(/'/g, "\\'")}' and trashed=false`);
+    const res = await api(`${API}/files?spaces=drive&q=${q}&fields=files(id,name,modifiedTime,owners(emailAddress))&orderBy=modifiedTime%20desc&pageSize=10`);
+    return (await res.json()).files || [];
+  }
+
   async function fileMeta(id) {
     const res = await api(`${API}/files/${encodeURIComponent(id)}?fields=id,name,owners(emailAddress,displayName),trashed`);
     return res.json();
@@ -348,7 +355,7 @@
     getTarget: () => Object.assign({}, target),
     hasFileScope: () => fileScope,
     createSharedFile: (data, name) => serialize(() => createSharedFile(data, name)),
-    shareFile, listPermissions, fileMeta, pickFile,
+    shareFile, listPermissions, fileMeta, pickFile, findFilesByName,
     listBackups, readBackup, deleteFile, createSpreadsheet, readSheet,
     createBackup: (data) => serialize(() => createBackup(data)),
     getFileId: () => fileId
