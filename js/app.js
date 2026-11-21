@@ -5,6 +5,7 @@
   /* ======================================================================
      CONFIGURARE
      ====================================================================== */
+  const APP_VERSION = 'v38'; // = CACHE din sw.js
   const CONFIG = {
     // Opțional: pune aici OAuth Client ID-ul ca să nu-l introduci manual pe fiecare dispozitiv.
     // Ex: '1234567890-abc.apps.googleusercontent.com'
@@ -1276,6 +1277,8 @@
             ${isAdmin() ? menuItem(`data-action="nav" data-view="settings"`, '⚙️', 'Setări') : menuItem(`data-action="ownPassword"`, '🔑', me.auth ? 'Schimbă parola mea' : 'Setează o parolă')}
             ${FWVault.enabled() ? menuItem('data-action="lockNow"', '🔒', 'Blochează acum') : ''}
             ${menuItem('data-action="switchProfile"', '↔️', 'Schimbă profilul')}
+            <div class="flex items-center justify-between gap-2 px-3 pt-2 mt-1 border-t border-slate-100 text-xs text-slate-500">
+              <span>Versiune ${APP_VERSION}</span><button data-action="checkUpdates" class="underline">Caută actualizări</button></div>
           </div>
         </div>
       </div>
@@ -1346,8 +1349,8 @@
     return `
       ${sectionHeader('Panou principal', `Actualizat: ${new Date(M().last_updated).getFullYear() > 2000 ? new Date(M().last_updated).toLocaleString('ro-RO') : '—'}`, null,
         `<div class="flex flex-wrap items-center gap-2"><button data-action="nav" data-view="update" class="btn-secondary btn-sm no-print">✏️ Actualizează soldurile</button>${currencySwitch()}</div>`)}
-      <div class="grid gap-4 lg:grid-cols-3">
-        <section class="card lg:col-span-2 bg-gradient-to-br from-teal-700 to-teal-900 text-white border-0">
+      <div>
+        <section class="card bg-gradient-to-br from-teal-700 to-teal-900 text-white border-0">
           <p class="text-teal-100 text-sm">${mine ? `Averea ta (${esc(me.name)})` : 'Avere netă totală a familiei'}</p>
           <p class="text-4xl sm:text-5xl font-bold mt-1 tabular-nums">${money(nw.total)}</p>
           ${dispCur() !== baseCur() ? `<p class="text-teal-100 text-sm tabular-nums">≈ ${fmtMoney(nw.total, baseCur())}</p>` : ''}
@@ -1357,15 +1360,9 @@
           ${missingRates.length ? `<p class="mt-4 text-sm bg-rose-500/30 rounded-lg px-3 py-2">⚠ ${missingRates.length} active au monede fără curs de schimb și nu sunt incluse. Adaugă cursul în Setări.</p>` : ''}
           ${nw.unallocated > 0.5 ? `<p class="mt-2 text-sm text-teal-100">Nealocat pe membri: ${money(nw.unallocated)}</p>` : ''}
         </section>
-        <section class="card">
-          <div class="flex items-center justify-between gap-2 mb-3"><h3 class="font-semibold">Alerte & remindere</h3>
-            <button data-action="exportIcs" class="btn-ghost btn-sm no-print" title="Exportă scadențele în Google Calendar (.ics)">📅 Calendar</button></div>
-          ${alertsHtml(true)}
-        </section>
       </div>
       ${dashboardPieCard(nw, mine)}
       <div class="grid gap-4 lg:grid-cols-2 mt-4">${historyCard(nw, mine)}${incomeCard(mine)}</div>
-      ${goalsCard()}
       ${mine ? '' : `<section class="card mt-4">
         <div class="flex items-center justify-between gap-3 mb-4"><h3 class="font-semibold">Defalcare pe membri (Account Splitting)</h3>
           <button data-action="nav" data-view="analysis" class="btn-ghost btn-sm">🔎 Analiză detaliată →</button></div>
@@ -1384,7 +1381,15 @@
             <p class="text-xl font-bold mt-1 tabular-nums">${money(nw.byCat[c] || 0)}</p>
             <p class="text-xs text-slate-500">${nw.assets.filter((a) => a.cat === c).length} înregistrări</p></button>`;
         }).join('')}
-      </section>`;
+      </section>
+      <div class="grid gap-4 lg:grid-cols-2 mt-4 items-start">
+        <section class="card">
+          <div class="flex items-center justify-between gap-2 mb-3"><h3 class="font-semibold">Alerte & remindere</h3>
+            <button data-action="exportIcs" class="btn-ghost btn-sm no-print" title="Exportă scadențele în Google Calendar (.ics)">📅 Calendar</button></div>
+          ${alertsHtml(true)}
+        </section>
+        ${goalsCard().replace('class="card mt-4"', 'class="card"')}
+      </div>`;
   }
 
   // Totalurile doar pentru partea unui membru (aceeași formă ca Calc.netWorth).
@@ -3212,6 +3217,7 @@
 
   const actions = {
     nav: (ds) => { state.view = ds.view; state.userMenu = false; state.moreOpen = false; window.scrollTo(0, 0); render(); },
+    checkUpdates: () => { state.userMenu = false; render(); checkForUpdates(); },
     toggleUserMenu: () => { state.userMenu = !state.userMenu; state.moreOpen = false; render(); },
     toggleMore: () => { state.moreOpen = !state.moreOpen; state.userMenu = false; render(); },
     closeMenus: () => { state.userMenu = false; state.moreOpen = false; render(); },
@@ -3612,11 +3618,35 @@
   /* ======================================================================
      INIT
      ====================================================================== */
+  /* ---------- Actualizări: caută versiuni noi și reîncarcă automat ---------- */
+  let swReg = null;
+  function setupUpdates() {
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloading = false;
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => { swReg = reg; }).catch((err) => console.warn('SW:', err));
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloading) return; // prima instalare: nu reîncărcăm
+      if (state.modal) { toast('Există o versiune nouă a aplicației. Închide fereastra deschisă și redeschide aplicația.', 'info', 8000); return; }
+      reloading = true;
+      location.reload();
+    });
+    let last = 0;
+    const check = () => { if (swReg && navigator.onLine && Date.now() - last > 60000) { last = Date.now(); swReg.update().catch(() => {}); } };
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
+    window.addEventListener('focus', check);
+  }
+  async function checkForUpdates() {
+    if (!swReg) { location.reload(); return; }
+    toast('Se caută actualizări…', 'info', 2000);
+    try { await swReg.update(); } catch (e) { /* offline */ }
+    setTimeout(() => { if (!swReg.installing && !swReg.waiting) toast(`Ai ultima versiune (${APP_VERSION}).`, 'success'); }, 1500);
+  }
+
   async function init() {
     applyTheme();
     if (window.matchMedia) { try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if ((settings.theme || 'auto') === 'auto') { applyTheme(); if (state.data) render(); } }); } catch (e) { /* ignore */ } }
     if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-      navigator.serviceWorker.register('sw.js').catch((err) => console.warn('SW:', err));
+      setupUpdates();
     }
     if (clientId() && navigator.onLine) DriveSync.preload();
     applyTarget();

@@ -123,3 +123,13 @@ test('ascunde sumele: 👁 din antet maschează sumele, păstrează procentele; 
   assert.equal(app.settings().hideAmounts, false);
 });
 
+test('panou: alertele și obiectivele sunt la final', async () => {
+  const app = await boot({ data: makeFamily() });
+  const titles = app.qa('#app section.card h3').map((h) => h.textContent.trim());
+  const iAlerts = titles.findIndex((t) => t.startsWith('Alerte'));
+  const iGoals = titles.findIndex((t) => t.includes('Obiective'));
+  const iEvo = titles.findIndex((t) => t.includes('Evoluția'));
+  assert.ok(iAlerts > iEvo && iGoals > iEvo, `ordine: ${titles.join(' | ')}`);
+  assert.equal(Math.min(iAlerts, iGoals), titles.length - 2, 'ultimele două carduri');
+});
+

@@ -1,5 +1,5 @@
 /* sw.js — funcționare 100% offline după prima încărcare */
-const CACHE = 'fw-pwa-v36';
+const CACHE = 'fw-pwa-v38'; // ține-l egal cu APP_VERSION din js/app.js (verificat de teste)
 const SHELL = [
   './', './index.html', './manifest.json', './css/styles.css', './css/tailwind.css',
   './js/app.js', './js/merge.js', './js/vault.js', './js/drive-sync.js', './js/calculators.js',
@@ -39,10 +39,10 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // Same-origin: network-first (actualizări rapide), fallback cache (offline)
+  // Same-origin: network-first, revalidat la server (ocolește cache-ul HTTP de ~10 min al GitHub Pages); offline → cache
   if (url.origin === self.location.origin) {
     e.respondWith(
-      fetch(req)
+      fetch(req, { cache: 'no-cache' })
         .then((res) => {
           if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
           return res;
@@ -52,3 +52,9 @@ self.addEventListener('fetch', (e) => {
     );
   }
 });
+
+// Pagina poate întreba versiunea service worker-ului activ.
+self.addEventListener('message', (e) => {
+  if (e.data === 'GET_VERSION' && e.source) e.source.postMessage({ type: 'VERSION', version: CACHE.replace('fw-pwa-', '') });
+});
+
