@@ -22,7 +22,7 @@ function memStorage(map = new Map()) {
 
 /** Google Drive simulat: folderul privat (appDataFolder), fișiere vizibile, permisiuni, backup-uri, cursuri BCE. */
 function createDrive({ email = 'andrei@example.com', rates = { RON: 5.1, USD: 1.1 } } = {}) {
-  const st = { files: new Map(), next: 1, calls: [], perms: new Map(), email, rates };
+  const st = { files: new Map(), next: 1, calls: [], perms: new Map(), sheets: new Map(), email, rates };
   const ok = (b, status = 200) => ({ ok: true, status, json: async () => b });
   const fail = (status, message) => ({ ok: false, status, json: async () => ({ error: { message } }) });
   const parseMultipart = (body) => {
@@ -34,6 +34,19 @@ function createDrive({ email = 'andrei@example.com', rates = { RON: 5.1, USD: 1.
     st.calls.push(`${method} ${url}`);
     const u = new URL(url);
     if (u.host === 'api.frankfurter.dev') return ok({ amount: 1, base: 'EUR', date: '2026-01-02', rates: st.rates });
+    if (u.host === 'sheets.googleapis.com') {
+      if (method === 'POST' && u.pathname === '/v4/spreadsheets') {
+        const body = JSON.parse(opts.body);
+        const id = 'S' + st.next++;
+        st.sheets.set(id, { body, values: [] });
+        st.files.set(id, { id, name: body.properties.title, appdata: false, content: '{}', createdTime: new Date().toISOString(), trashed: false });
+        st.perms.set(id, [{ id: 'p0', emailAddress: st.email, role: 'owner' }]);
+        return ok({ spreadsheetId: id, properties: { title: body.properties.title } });
+      }
+      const mv = u.pathname.match(/^\/v4\/spreadsheets\/([^/]+)\/values\/(.+)$/);
+      if (mv && st.sheets.has(decodeURIComponent(mv[1]))) return ok({ values: st.sheets.get(decodeURIComponent(mv[1])).values });
+      return fail(404, 'Spreadsheet not found');
+    }
     if (u.pathname.endsWith('/about')) return ok({ user: { emailAddress: st.email } });
     const m = u.pathname.match(/\/files\/([^/]+)(\/permissions)?$/);
     if (method === 'GET' && u.pathname.endsWith('/drive/v3/files')) {

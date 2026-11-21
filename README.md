@@ -68,6 +68,7 @@ Setări → 🔐 Criptare date. Datele sunt criptate cu AES-256-GCM, cu o cheie 
 - **Reînnoire depozit** la scadență, cu dobânda capitalizată.
 - **Obiective** (`goals`) cu conturi legate, progres și suma lunară necesară.
 - **Export calendar (.ics)**: scadențe, cupoane, documente auto, cu alarme cu 7 și 1 zi înainte.
+- **Dețineri din Google Sheets**: aplicația creează un sheet (Broker · Simbol · Cantitate · Preț mediu + formule GOOGLEFINANCE pentru monedă, preț, valoare, profit), îl citește prin Sheets API (scope `drive.file`, doar acel fișier) și setează valoarea fiecărui cont de broker = acțiuni (convertite în moneda contului) + numerar. Cere **Google Sheets API** activat în Cloud Console.
 - **Temă** automată / luminoasă / întunecată; paleta graficelor are nuanțe separate pentru fundal închis.
 
 ## Teste

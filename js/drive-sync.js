@@ -215,6 +215,17 @@
   async function readBackup(id) { return decodeIn(await download(id)); } // NEED_PASSWORD dacă e criptat cu altă parolă
   async function deleteFile(id) { await api(`${API}/files/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
 
+  /* ---------- Google Sheets (dețineri de acțiuni cu prețuri GOOGLEFINANCE) ---------- */
+  const SHEETS = 'https://sheets.googleapis.com/v4/spreadsheets';
+  async function createSpreadsheet(body) {
+    const res = await api(SHEETS, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=UTF-8' }, body: JSON.stringify(body) });
+    return res.json(); // { spreadsheetId, spreadsheetUrl, properties: { title } }
+  }
+  async function readSheet(id, range) {
+    const res = await api(`${SHEETS}/${encodeURIComponent(id)}/values/${encodeURIComponent(range)}?valueRenderOption=UNFORMATTED_VALUE`);
+    return (await res.json()).values || [];
+  }
+
   /* ---------- Fișier partajat ---------- */
   /** Creează în „Drive-ul meu” un fișier vizibil cu datele (criptate dacă e activă parola familiei). */
   async function createSharedFile(data, name) {
@@ -269,18 +280,18 @@
   }
 
   /** Deschide selectorul; întoarce { id, name } sau null dacă utilizatorul renunță. */
-  async function pickFile({ apiKey, appId }) {
+  async function pickFile({ apiKey, appId, mimeTypes = 'application/json', title = 'Alege fișierul cu datele familiei' }) {
     if (!hasValidToken()) throw new DriveError('Conectează-te întâi la Google Drive.', 401);
     if (!fileScope) throw new DriveError('Reconectează Google Drive și acceptă permisiunea pentru fișierele folosite cu aplicația.', 401);
     if (!apiKey) throw new DriveError('Lipsește cheia Google API (vezi Setări).');
     await loadPicker();
     return new Promise((resolve) => {
-      const shared = new google.picker.DocsView(google.picker.ViewId.DOCS).setOwnedByMe(false).setMimeTypes('application/json').setMode(google.picker.DocsViewMode.LIST);
-      const mine = new google.picker.DocsView(google.picker.ViewId.DOCS).setOwnedByMe(true).setMimeTypes('application/json').setMode(google.picker.DocsViewMode.LIST);
+      const shared = new google.picker.DocsView(google.picker.ViewId.DOCS).setOwnedByMe(false).setMimeTypes(mimeTypes).setMode(google.picker.DocsViewMode.LIST);
+      const mine = new google.picker.DocsView(google.picker.ViewId.DOCS).setOwnedByMe(true).setMimeTypes(mimeTypes).setMode(google.picker.DocsViewMode.LIST);
       const picker = new google.picker.PickerBuilder()
         .addView(shared).addView(mine)
         .setOAuthToken(token).setDeveloperKey(apiKey).setAppId(appId)
-        .setTitle('Alege fișierul cu datele familiei').setLocale('ro')
+        .setTitle(title).setLocale('ro')
         .setCallback((d) => {
           if (d.action === google.picker.Action.PICKED && d.docs && d.docs[0]) resolve({ id: d.docs[0].id, name: d.docs[0].name });
           else if (d.action === google.picker.Action.CANCEL) resolve(null);
@@ -338,7 +349,7 @@
     hasFileScope: () => fileScope,
     createSharedFile: (data, name) => serialize(() => createSharedFile(data, name)),
     shareFile, listPermissions, fileMeta, pickFile,
-    listBackups, readBackup, deleteFile,
+    listBackups, readBackup, deleteFile, createSpreadsheet, readSheet,
     createBackup: (data) => serialize(() => createBackup(data)),
     getFileId: () => fileId
   };

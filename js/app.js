@@ -28,6 +28,7 @@
   const NAV_ADMIN = [
     { id: 'dashboard', label: 'Panou', icon: '📊' },
     { id: 'analysis', label: 'Analiză avere', icon: '🔎' },
+    { id: 'portfolio', label: 'Portofoliu', icon: '📊' },
     { id: 'update', label: 'Actualizare', icon: '✏️' },
     { id: 'investments', label: 'Investiții', icon: '📈' },
     { id: 'crypto', label: 'Crypto', icon: '₿' },
@@ -265,7 +266,7 @@
     const d = data && typeof data === 'object' ? data : emptyData();
     d.metadata = Object.assign({ version: '1.2.0', base_currency: 'RON', exchange_rates: {} }, d.metadata || {});
     if (!d.metadata.last_updated) d.metadata.last_updated = new Date().toISOString();
-    ['family_members', 'investment_accounts', 'grandparents_accounts', 'real_estate', 'children_savings', 'vehicles', 'goals', 'history', 'changelog']
+    ['family_members', 'investment_accounts', 'grandparents_accounts', 'real_estate', 'children_savings', 'vehicles', 'goals', 'history', 'changelog', 'pf_history']
       .forEach((k) => { if (!Array.isArray(d[k])) d[k] = []; });
     d.emergency_guide = Object.assign({ instructions: '', trusted_contacts: [] }, d.emergency_guide || {});
     if (!Array.isArray(d.emergency_guide.trusted_contacts)) d.emergency_guide.trusted_contacts = [];
@@ -319,6 +320,34 @@
     const round = (o) => Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [k, Math.round(v)]));
     const rec = { id, total: Math.round(nw.total), byMember: round(nw.byMember), byCat: round(nw.byCat), at: new Date().toISOString() };
     d.history = (d.history || []).filter((h) => h.id !== id).concat([rec]).sort((a, b) => a.id.localeCompare(b.id)).slice(-120);
+    updatePortfolioSnapshot(d);
+  }
+
+  // Valoarea și costul acțiunilor (din sheet), pe zi — pentru graficul „Evoluția profitului”.
+  function updatePortfolioSnapshot(d) {
+    const m = d.metadata;
+    const toB = (v, c) => (v == null || !(c === m.base_currency || Calc.rateKnown(c, m)) ? 0 : Calc.toBase(v, c, m));
+    let value = 0, cost = 0, any = false;
+    const byMember = {};
+    (d.investment_accounts || []).forEach((a) => {
+      if (!(a.holdings || []).length) return;
+      any = true;
+      let v = 0, c = 0;
+      a.holdings.forEach((h) => { if (h.value != null) { v += toB(h.value, h.currency); c += toB(h.cost, h.currency); } });
+      value += v; cost += c;
+      (a.splits && a.splits.length ? a.splits : a.owner_id ? [{ member_id: a.owner_id, percentage: 100 }] : []).forEach((s2) => {
+        const f = Calc.num(s2.percentage) / 100;
+        const b = byMember[s2.member_id] || { v: 0, c: 0 };
+        b.v += v * f; b.c += c * f;
+        byMember[s2.member_id] = b;
+      });
+    });
+    if (!any) return;
+    const round = (x) => Math.round(x);
+    Object.values(byMember).forEach((b) => { b.v = round(b.v); b.c = round(b.c); });
+    const id = Calc.todayISO();
+    d.pf_history = (d.pf_history || []).filter((h) => h.id !== id).concat([{ id, value: round(value), cost: round(cost), byMember }])
+      .sort((a, b) => a.id.localeCompare(b.id)).slice(-730);
   }
 
   /* ---------- Jurnal de modificări (cine, ce, când) ---------- */
@@ -375,12 +404,12 @@
         <p class="text-xs text-slate-400">${esc(new Date(e.at).toLocaleString('ro-RO'))}</p></div></li>`).join('')}</ul>`;
   }
 
-  function commit(mutator, msg) {
+  function commit(mutator, msg, opts = {}) {
     const before = JSON.parse(JSON.stringify(D()));
     mutator(D());
     const now = new Date().toISOString();
     FWMerge.stampChanges(before, D(), now);
-    logChanges(before, D(), now);
+    if (opts.log !== false) logChanges(before, D(), now);
     persist();
     render();
     if (msg) toast(msg, 'success');
@@ -751,7 +780,9 @@
         { k: 'platform', label: 'Platformă / Instituție', type: 'text', req: true, list: 'dl-platforms' },
         { k: 'account_type', label: 'Tip investiție / Instrumente', type: 'text', list: 'dl-inv-types', placeholder: 'Alege din listă sau scrie' },
         { k: 'owner_id', label: 'Titular cont', type: 'member', hint: 'Pe numele cui e contul la broker (poate diferi de împărțirea banilor)' },
-        { k: 'total_value', label: 'Valoare totală', type: 'number', req: true, min: 0 },
+        { k: 'total_value', label: 'Valoare totală', type: 'number', req: true, min: 0, hint: 'Cu sheet-ul de dețineri se calculează automat (acțiuni + numerar)' },
+        { k: 'cash_amount', label: 'Numerar în cont (neinvestit)', type: 'number', min: 0, showIf: 'stocks', hint: 'Se adună la valoarea acțiunilor din sheet' },
+        { k: 'sheet_broker', label: 'Nume în sheet-ul de dețineri', type: 'text', showIf: 'stocks', hint: 'Exact ca în coloana Broker din Google Sheets (implicit: platforma)' },
         { k: 'currency', label: 'Monedă', type: 'currency', req: true },
         { k: 'interest_rate', label: 'Dobândă / cupon anual (%)', type: 'number', min: 0, max: 100, showIf: 'income' },
         { k: 'start_date', label: 'Data constituirii', type: 'date', showIf: 'deposit' },
@@ -912,7 +943,8 @@
   }
 
   // Câmpurile condiționate din formular: depozit / venit (depozit sau titluri de stat).
-  const showMatch = (kind, type) => (kind === 'deposit' ? Calc.isDeposit(type) : kind === 'income' ? Calc.isDeposit(type) || Calc.isBond(type) : true);
+  const showMatch = (kind, type) => (kind === 'deposit' ? Calc.isDeposit(type) : kind === 'income' ? Calc.isDeposit(type) || Calc.isBond(type)
+    : kind === 'stocks' ? !Calc.isDeposit(type) && !Calc.isBond(type) : true);
 
   // Categoria „crypto” e dedusă din tip; conturile stau tot în investment_accounts.
   const colOf = (cat) => (cat === 'crypto' ? 'investment_accounts' : cat);
@@ -1542,7 +1574,7 @@
     const C = 100, R = 92, r = 60;
     const pt = (rad, a) => [(C + rad * Math.cos(a)).toFixed(2), (C + rad * Math.sin(a)).toFixed(2)];
     let a0 = -Math.PI / 2;
-    const tip = (sl) => `${sl.meta.label} · ${money(sl.value)} · ${pctTxt(sl.value, total)}`;
+    const tip = (sl) => `${sl.meta.label} · ${sliceAmount(sl)} · ${pctTxt(sl.value, total)}`;
     const paths = slices.map((sl) => {
       const f = sl.value / total;
       if (f >= 0.9999) {
@@ -1567,11 +1599,12 @@
       `<button data-action="setPieSort" data-chart="${chart}" data-value="${v}" aria-pressed="${v === current}" class="${v === current ? 'cur-active' : ''}">${l}</button>`).join('')}</div>`;
   }
 
+  const sliceAmount = (sl) => (sl.native != null ? money(sl.native, sl.key) : money(sl.value));
   function pieLegend(slices, total) {
-    return `<ul class="space-y-2 text-sm">${slices.map((sl) => `<li class="flex items-center gap-2" data-tip="${esc(sl.meta.label)} · ${esc(money(sl.value))} · ${pctTxt(sl.value, total)}">
+    return `<ul class="space-y-2 text-sm">${slices.map((sl) => `<li class="flex items-center gap-2" data-tip="${esc(sl.meta.label)} · ${esc(sliceAmount(sl))} · ${pctTxt(sl.value, total)}">
       <span class="w-2.5 h-2.5 rounded-sm shrink-0" style="background:${sl.meta.color}"></span>
       <span class="flex-1 min-w-0 truncate">${esc(sl.meta.label)}</span>
-      <span class="tabular-nums font-semibold whitespace-nowrap">${money(sl.value)}</span>
+      <span class="tabular-nums font-semibold whitespace-nowrap">${sliceAmount(sl)}</span>
       <span class="tabular-nums text-slate-500 w-12 text-right">${pctTxt(sl.value, total)}</span></li>`).join('')}</ul>`;
   }
 
@@ -1622,16 +1655,22 @@
 
   /** Matrice membri × categorii cu nuanțare secvențială (o singură nuanță, deschis→închis). */
   function matrixHtml(rows) {
-    const mems = [...new Set(rows.map((r) => r.member_id))]
-      .sort((a, b) => sum(rows.filter((r) => r.member_id === b).map((r) => r.value)) - sum(rows.filter((r) => r.member_id === a).map((r) => r.value)));
     const cats = Object.keys(Calc.CATEGORIES).filter((c) => rows.some((r) => r.cat === c));
-    if (!mems.length) return '<p class="text-sm text-slate-500">Niciun rezultat pentru filtrele alese.</p>';
     const cell = (m, c) => sum(rows.filter((r) => r.member_id === m && r.cat === c).map((r) => r.value));
+    const mTotal = (m) => sum(rows.filter((r) => r.member_id === m).map((r) => r.value));
+    const ms = Object.assign({ key: 'total', dir: 'desc' }, analysis.matrixSort || {});
+    const mems = [...new Set(rows.map((r) => r.member_id))].sort((a, b) => {
+      const d = ms.dir === 'asc' ? 1 : -1;
+      if (ms.key === 'name') return (a === Calc.UNALLOCATED ? 'Nealocat' : memberName(a)).localeCompare(b === Calc.UNALLOCATED ? 'Nealocat' : memberName(b), 'ro') * d;
+      const va = ms.key === 'total' ? mTotal(a) : cell(a, ms.key), vb = ms.key === 'total' ? mTotal(b) : cell(b, ms.key);
+      return (va - vb) * d || mTotal(b) - mTotal(a);
+    });
+    if (!mems.length) return '<p class="text-sm text-slate-500">Niciun rezultat pentru filtrele alese.</p>';
     const max = Math.max(1, ...mems.flatMap((m) => cats.map((c) => cell(m, c))));
     const total = sum(rows.map((r) => r.value));
     const name = (m) => (m === Calc.UNALLOCATED ? 'Nealocat' : memberName(m));
     return `<div class="overflow-x-auto -mx-1"><table class="matrix w-full text-sm">
-      <thead><tr><th class="text-left">Membru</th>${cats.map((c) => `<th><span class="inline-flex items-center gap-1.5"><span class="w-2 h-2 rounded-sm" style="background:${Calc.CATEGORIES[c].color}"></span>${Calc.CATEGORIES[c].label}</span></th>`).join('')}<th>Total</th></tr></thead>
+      <thead><tr>${sortTh('sortMatrix', 'name', 'Membru', ms, '', 'text-left')}${cats.map((c) => sortTh('sortMatrix', c, `<span class="w-2 h-2 rounded-sm" style="background:${Calc.CATEGORIES[c].color}"></span>${Calc.CATEGORIES[c].label}`, ms)).join('')}${sortTh('sortMatrix', 'total', 'Total', ms)}</tr></thead>
       <tbody>${mems.map((m) => {
         const rowTotal = sum(cats.map((c) => cell(m, c)));
         return `<tr><th class="text-left font-medium whitespace-nowrap">${esc(name(m))}</th>
@@ -1788,6 +1827,7 @@
           <div class="flex items-start justify-between gap-3"><div class="min-w-0"><h3 class="font-semibold text-lg">${esc(a.platform)}</h3><p class="text-sm text-slate-500">${esc(a.account_type)}</p>
             ${a.owner_id && member(a.owner_id) ? `<p class="text-sm mt-1 flex items-center gap-2">${avatar(member(a.owner_id), 'w-5 h-5 text-[10px]')} Titular: <strong>${esc(memberName(a.owner_id))}</strong></p>` : ''}</div>${cardActions('investment_accounts', a.id)}</div>
           <div class="mt-3">${valueBlock(a.total_value, a.currency)}</div>
+          ${holdingsHtml(a)}
           ${myShareLine(a, base)}
           ${Calc.isBond(a.account_type) && (Calc.num(a.interest_rate) > 0 || a.maturity_date) ? `<dl class="grid grid-cols-2 gap-2 mt-3 text-sm">
             <div class="stat"><dt>Cupon anual</dt><dd>${Calc.num(a.interest_rate)}%${Calc.num(a.interest_rate) > 0 ? ` · ${money(Calc.num(a.total_value) * Calc.num(a.interest_rate) / 100 * (1 - (a.tax_rate == null || a.tax_rate === '' ? 0 : Calc.num(a.tax_rate)) / 100), a.currency)} net` : ''}</dd></div>
@@ -2188,6 +2228,434 @@
     if (settings.driveConnected) persist(); // urcă datele în folderul privat la următoarea sincronizare
   }
 
+  /* ---------- Dețineri din Google Sheets (GOOGLEFINANCE) ---------- */
+  const SHEET_TAB = 'Detineri';
+  const SHEET_ROWS = 300;
+  const SHEET_MIME = 'application/vnd.google-apps.spreadsheet';
+  const holdingsAccounts = () => D().investment_accounts.filter((a) => !Calc.isDeposit(a.account_type) && !Calc.isBond(a.account_type));
+  const brokerName = (a) => String(a.sheet_broker || a.platform || '').trim();
+  const brokerKey = (v) => String(v || '').trim().toLowerCase();
+  const sheetUrl = (id) => `https://docs.google.com/spreadsheets/d/${encodeURIComponent(id)}/edit`;
+  const fmtQty = (q) => (masked() ? '••' : Calc.num(q).toLocaleString('ro-RO', { maximumFractionDigits: 6 }));
+  const convCur = (v, from, to) => { const b = Calc.toBase(v, from, M()); return to === baseCur() ? b : b / +(M().exchange_rates || {})[to]; };
+  const canConv = (c) => c === baseCur() || Calc.rateKnown(c, M());
+
+  // Antet de coloană sortabil (aceleași stiluri ca lista de active din Analiză).
+  function sortTh(action, key, label, cur, extra = '', cls = '') {
+    const active = cur.key === key;
+    return `<th class="${cls}" aria-sort="${active ? (cur.dir === 'asc' ? 'ascending' : 'descending') : 'none'}"><button data-action="${action}" data-value="${key}" ${extra}
+      class="sort-btn ${active ? 'sort-active' : ''}" title="Sortează după ${esc(String(label).replace(/<[^>]+>/g, ''))}">${label}<span class="sort-arrow" aria-hidden="true">${active ? (cur.dir === 'asc' ? '▲' : '▼') : '↕'}</span></button></th>`;
+  }
+  const nextSort = (cur, key, textKeys) => (cur.key === key ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: textKeys.includes(key) ? 'asc' : 'desc' });
+
+  function holdingsHtml(a) {
+    const toB = (v, c) => (v == null || !canConv(c) ? null : Calc.toBase(v, c, M()));
+    const hs = (a.holdings || []).map((h) => {
+      const profit = h.value != null ? h.value - h.cost : null;
+      return Object.assign({}, h, { profit, pct: profit != null && h.cost ? (profit / h.cost) * 100 : null, bValue: toB(h.value, h.currency), bProfit: toB(profit, h.currency) });
+    });
+    const cash = Calc.num(a.cash_amount);
+    if (!hs.length && !cash) return '';
+    const srt = Object.assign({ key: 'value', dir: 'desc' }, settings.holdingsSort || {});
+    const keyOf = { symbol: (h) => h.symbol, qty: (h) => h.qty, avg: (h) => h.avg, price: (h) => h.price, value: (h) => h.bValue, profit: (h) => h.bProfit, pct: (h) => h.pct };
+    const k = keyOf[srt.key] || keyOf.value, dir = srt.dir === 'asc' ? 1 : -1;
+    hs.sort((x, y) => {
+      const vx = k(x), vy = k(y);
+      if (vx == null && vy == null) return 0;
+      if (vx == null) return 1; if (vy == null) return -1; // fără preț → la final
+      return (typeof vx === 'string' ? vx.localeCompare(vy, 'ro', { numeric: true, sensitivity: 'base' }) : vx - vy) * dir || (y.bValue || 0) - (x.bValue || 0);
+    });
+    const open = !!(settings.holdingsOpen || {})[a.id];
+    const totalProfit = hs.reduce((sum2, h) => sum2 + (h.bProfit || 0), 0);
+    const totalCost = hs.reduce((sum2, h) => sum2 + (toB(h.cost, h.currency) || 0), 0);
+    const pctAll = totalCost ? (totalProfit / totalCost) * 100 : null;
+    const ago = a.holdings_at ? Math.max(0, Math.round((Date.now() - Date.parse(a.holdings_at)) / 60000)) : null;
+    const agoTxt = ago == null ? '' : ago < 1 ? 'acum' : ago < 60 ? `acum ${ago} min` : ago < 1440 ? `acum ${Math.round(ago / 60)} h` : `acum ${Math.round(ago / 1440)} zile`;
+    const row = (h) => `<tr><td class="text-left font-medium">${esc(h.symbol)}</td><td>${fmtQty(h.qty)}</td><td>${Calc.num(h.avg) ? money(h.avg, h.currency) : '—'}</td>
+      <td>${h.price != null ? money(h.price, h.currency) : '<span class="text-rose-600" title="Simbol necunoscut pentru Google Finance">#N/A</span>'}</td>
+      <td class="font-semibold">${h.value != null ? money(h.value, h.currency) : '—'}</td>
+      <td class="${h.profit == null ? '' : h.profit >= 0 ? 'text-emerald-700' : 'text-rose-600'}">${h.profit == null ? '—' : masked() ? '••' : (h.profit >= 0 ? '+' : '−') + money(Math.abs(h.profit), h.currency)}</td>
+      <td class="${h.pct == null ? '' : h.pct >= 0 ? 'text-emerald-700' : 'text-rose-600'}">${h.pct == null ? '—' : `${h.pct >= 0 ? '▲' : '▼'} ${Math.abs(h.pct).toFixed(1)}%`}</td></tr>`;
+    const th = (key, label, cls = '') => sortTh('sortHoldings', key, label, srt, '', cls);
+    return `<div class="mt-3 border-t border-slate-100 pt-3">
+      ${hs.length ? `<button data-action="toggleHoldings" data-id="${esc(a.id)}" aria-expanded="${open}" class="w-full flex flex-wrap items-center gap-x-3 gap-y-1 text-left text-sm rounded-lg hover:bg-slate-50 -mx-1 px-1 py-1">
+          <span class="font-medium">${open ? '▾' : '▸'} ${hs.length} ${hs.length === 1 ? 'poziție' : 'poziții'}</span>
+          <span class="${totalProfit >= 0 ? 'text-emerald-700' : 'text-rose-600'} tabular-nums">profit ${masked() ? '••' : (totalProfit >= 0 ? '+' : '−') + money(Math.abs(totalProfit))}${pctAll != null ? ` (${pctAll >= 0 ? '▲' : '▼'} ${Math.abs(pctAll).toFixed(1)}%)` : ''}</span>
+          <span class="text-xs text-slate-500 ml-auto">Google Sheets ${agoTxt}</span></button>
+        ${open ? `<div class="overflow-x-auto -mx-1 mt-2"><table class="matrix w-full text-xs sm:text-sm"><thead><tr>${th('symbol', 'Simbol', 'text-left')}${th('qty', 'Cant.')}${th('avg', 'Preț mediu')}${th('price', 'Preț')}${th('value', 'Valoare')}${th('profit', 'Profit')}${th('pct', '%')}</tr></thead>
+          <tbody>${hs.map(row).join('')}</tbody></table></div>` : ''}` : ''}
+      ${cash ? `<p class="text-xs text-slate-500 mt-2">Numerar: <strong>${money(cash, a.currency)}</strong></p>` : ''}
+    </div>`;
+  }
+
+  /* ---------- Portofoliu consolidat: toate acțiunile de la toți brokerii, pe simbol ---------- */
+  function portfolioData() {
+    const mine = mineOnly();
+    const toB = (v, c) => (v == null || !canConv(c) ? null : Calc.toBase(v, c, M()));
+    const map = new Map();
+    let cash = 0;
+    const accs = holdingsAccounts().filter((a) => (a.holdings || []).length || Calc.num(a.cash_amount));
+    accs.forEach((a) => {
+      const f = mine ? myPct(a) / 100 : 1;
+      if (!f) return;
+      cash += (toB(Calc.num(a.cash_amount), a.currency) || 0) * f;
+      (a.holdings || []).forEach((h) => {
+        const k = String(h.symbol).toUpperCase();
+        const it = map.get(k) || { symbol: h.symbol, currency: h.currency, price: h.price, qty: 0, cost: 0, value: 0, bValue: 0, bCost: 0, priced: true, brokers: [] };
+        const qty = h.qty * f, cost = h.cost * f, value = h.value == null ? null : h.value * f;
+        it.qty += qty; it.cost += cost;
+        if (value == null) it.priced = false; else it.value += value;
+        it.bCost += toB(cost, h.currency) || 0;
+        it.bValue += value == null ? 0 : toB(value, h.currency) || 0;
+        if (h.price != null) it.price = h.price;
+        it.brokers.push({ name: brokerName(a), platform: a.platform, owner: holdersNames(a), qty, bValue: value == null ? 0 : toB(value, h.currency) || 0 });
+        map.set(k, it);
+      });
+    });
+    const items = [...map.values()].map((it) => Object.assign(it, {
+      avg: it.qty ? it.cost / it.qty : 0, bProfit: it.priced ? it.bValue - it.bCost : null,
+      pct: it.priced && it.bCost ? ((it.bValue - it.bCost) / it.bCost) * 100 : null
+    }));
+    const total = sum(items.map((i) => i.bValue));
+    items.forEach((i) => { i.weight = total ? (i.bValue / total) * 100 : 0; });
+    return { items, total, cost: sum(items.map((i) => i.bCost)), cash, accounts: accs.length };
+  }
+
+  // Câștig = albastru, pierdere = roșu (pereche divergentă; nuanțe separate în tema întunecată).
+  const gainColor = () => Calc.PALETTE[0];
+  const lossColor = () => Calc.PALETTE[7];
+
+  /** Profit pe simbol: bare orizontale față de zero, cele mai mari câștiguri sus. */
+  function profitBarsCard(P) {
+    const all = P.items.filter((i) => i.bProfit != null).sort((a, b) => b.bProfit - a.bProfit);
+    if (!all.length) return '';
+    const MAX = 15;
+    const list = all.length > MAX ? all.slice(0, Math.ceil(MAX / 2)).concat(all.slice(-Math.floor(MAX / 2))) : all;
+    const W = 600, rowH = 28, padL = 120, padR = 104, top = 6;
+    const H = top + list.length * rowH + 6;
+    const maxAbs = Math.max(1, ...list.map((i) => Math.abs(i.bProfit)));
+    const hasNeg = list.some((i) => i.bProfit < 0), hasPos = list.some((i) => i.bProfit > 0);
+    const plotL = padL, plotR = W - padR;
+    const zero = hasNeg && hasPos ? plotL + (plotR - plotL) * (Math.max(0, ...list.map((i) => -i.bProfit)) / (Math.max(0, ...list.map((i) => -i.bProfit)) + Math.max(0, ...list.map((i) => i.bProfit)))) : hasNeg ? plotR : plotL;
+    const scale = (hasNeg && hasPos ? (plotR - plotL) : (plotR - plotL)) / (hasNeg && hasPos ? (Math.max(0, ...list.map((i) => -i.bProfit)) + Math.max(0, ...list.map((i) => i.bProfit))) : maxAbs);
+    const fmt = (v) => (masked() ? '••' : (v >= 0 ? '+' : '−') + money(Math.abs(v)));
+    const bars = list.map((i, n) => {
+      const y = top + n * rowH + 5, h = rowH - 10;
+      const w = Math.max(2, Math.abs(i.bProfit) * scale);
+      const x = i.bProfit >= 0 ? zero : zero - w;
+      const color = i.bProfit >= 0 ? gainColor() : lossColor();
+      const r = Math.min(4, w / 2);
+      // capăt rotunjit doar la capătul valorii, ancorat drept pe axa zero
+      const d = i.bProfit >= 0
+        ? `M${x},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h - r}Q${x + w},${y + h} ${x + w - r},${y + h}H${x}Z`
+        : `M${x + w},${y}H${x + r}Q${x},${y} ${x},${y + r}V${y + h - r}Q${x},${y + h} ${x + r},${y + h}H${x + w}Z`;
+      const pct = i.pct != null ? ` (${i.pct >= 0 ? '+' : '−'}${Math.abs(i.pct).toFixed(1)}%)` : '';
+      return `<g data-tip="${esc(i.symbol)} · ${esc(fmt(i.bProfit))}${esc(pct)}">
+        <rect x="0" y="${y - 4}" width="${W}" height="${rowH}" fill="transparent"></rect>
+        <text x="${padL - 10}" y="${y + h / 2 + 5}" text-anchor="end" font-size="14" fill="#64748b">${esc(i.symbol.replace(/^[A-Z]+:/, ''))}</text>
+        <path d="${d}" fill="${color}"></path>
+        <text x="${W - 4}" y="${y + h / 2 + 5}" text-anchor="end" font-size="13" fill="#64748b">${esc(fmt(i.bProfit))}</text></g>`;
+    }).join('');
+    return `<section class="card"><h3 class="font-semibold mb-1">Profit pe simbol</h3>
+      <p class="text-xs text-slate-500 mb-2"><span class="inline-block w-2.5 h-2.5 rounded-sm align-middle" style="background:${gainColor()}"></span> câștig ·
+        <span class="inline-block w-2.5 h-2.5 rounded-sm align-middle" style="background:${lossColor()}"></span> pierdere${all.length > list.length ? ` · cele mai mari ${list.length} din ${all.length}` : ''}</p>
+      <svg viewBox="0 0 ${W} ${H}" class="w-full h-auto" role="img" aria-label="Profit pe simbol">
+        <line x1="${zero}" x2="${zero}" y1="0" y2="${H}" stroke="#e2e8f0" stroke-width="1"></line>${bars}</svg></section>`;
+  }
+
+  /** Evoluția profitului (valoare − cost) din fotografiile zilnice. */
+  function profitLineCard() {
+    const me = state.profileId, mine = mineOnly();
+    const pts = (D().pf_history || []).map((h) => {
+      const b = mine ? (h.byMember || {})[me] : { v: h.value, c: h.cost };
+      return b ? { date: h.id, v: b.v - b.c } : null;
+    }).filter(Boolean);
+    const head = '<h3 class="font-semibold mb-1">Evoluția profitului</h3>';
+    if (pts.length < 2) return `<section class="card">${head}<p class="text-sm text-slate-500">Aplicația salvează zilnic valoarea și costul acțiunilor. Graficul apare de la a doua zi cu dețineri citite din sheet.</p></section>`;
+    const W = 600, H = 220, P = { l: 72, r: 16, t: 14, b: 32 };
+    const vals = pts.map((p) => conv(p.v));
+    let min = Math.min(0, ...vals), max = Math.max(0, ...vals);
+    if (min === max) { max += 1; min -= 1; }
+    const pad = (max - min) * 0.1; min -= pad; max += pad;
+    const iw = W - P.l - P.r, ih = H - P.t - P.b;
+    const x = (i) => P.l + (i * iw) / (pts.length - 1), y = (v) => P.t + ih * (1 - (v - min) / (max - min));
+    const line = vals.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+    const fmtAxis = (v) => (masked() ? '' : new Intl.NumberFormat('ro-RO', { notation: Math.abs(v) >= 100000 ? 'compact' : 'standard', maximumFractionDigits: 0 }).format(v));
+    const last = vals[vals.length - 1];
+    const step = Math.ceil(pts.length / 4);
+    return `<section class="card">${head}
+      <p class="text-xs text-slate-500 mb-2">Acum: <strong class="tabular-nums" style="color:${last >= 0 ? gainColor() : lossColor()}">${masked() ? '••' : (last >= 0 ? '+' : '−') + fmtMoney(Math.abs(last), dispCur())}</strong> · valoare minus cost, în ${esc(dispCur())}</p>
+      <svg viewBox="0 0 ${W} ${H}" class="w-full h-auto" role="img" aria-label="Evoluția profitului">
+        ${[max, (max + min) / 2, min].map((t) => `<line x1="${P.l}" x2="${W - P.r}" y1="${y(t)}" y2="${y(t)}" stroke="#e2e8f0"></line><text x="${P.l - 8}" y="${y(t) + 5}" text-anchor="end" font-size="13" fill="#64748b">${esc(fmtAxis(t))}</text>`).join('')}
+        <line x1="${P.l}" x2="${W - P.r}" y1="${y(0)}" y2="${y(0)}" stroke="#94a3b8" stroke-dasharray="4 4"></line>
+        <path d="${line}" fill="none" stroke="${gainColor()}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></path>
+        ${vals.map((v, i) => `<circle cx="${x(i)}" cy="${y(v)}" r="5" fill="#fff" stroke="${v >= 0 ? gainColor() : lossColor()}" stroke-width="2" data-tip="${esc(Calc.formatDate(pts[i].date))} · ${esc(masked() ? '••' : (v >= 0 ? '+' : '−') + fmtMoney(Math.abs(v), dispCur()))}"></circle>`).join('')}
+        ${pts.map((p, i) => (i % step === 0 || i === pts.length - 1) && !(i !== pts.length - 1 && pts.length - 1 - i < step / 2)
+          ? `<text x="${x(i)}" y="${H - 10}" text-anchor="${i === 0 ? 'start' : i === pts.length - 1 ? 'end' : 'middle'}" font-size="13" fill="#64748b">${esc((Calc.parseDate(p.date) || new Date()).toLocaleDateString('ro-RO', { day: 'numeric', month: 'short' }))}</text>` : '').join('')}
+      </svg></section>`;
+  }
+
+  function renderPortfolio() {
+    const P = portfolioData();
+    if (!P.items.length) {
+      return sectionHeader('Portofoliu de acțiuni', 'Toate acțiunile de la toți brokerii, într-un singur loc') +
+        `<div class="card text-center py-10"><p class="text-4xl">📊</p><p class="mt-2 text-slate-600">Încă nu există dețineri. Ele vin din sheet-ul Google cu acțiunile tale.</p>
+          ${isAdmin() ? '<button data-action="nav" data-view="settings" class="btn-primary mt-4">⚙️ Setări → Dețineri</button>' : ''}</div>`;
+    }
+    const srt = Object.assign({ key: 'value', dir: 'desc' }, settings.portfolioSort || {});
+    const keyOf = { symbol: (i) => i.symbol, qty: (i) => i.qty, avg: (i) => i.avg, price: (i) => i.price, value: (i) => i.bValue, profit: (i) => i.bProfit, pct: (i) => i.pct, weight: (i) => i.weight };
+    const k = keyOf[srt.key] || keyOf.value, dir = srt.dir === 'asc' ? 1 : -1;
+    const items = P.items.slice().sort((x, y) => {
+      const vx = k(x), vy = k(y);
+      if (vx == null && vy == null) return 0;
+      if (vx == null) return 1; if (vy == null) return -1;
+      return (typeof vx === 'string' ? vx.localeCompare(vy, 'ro', { numeric: true, sensitivity: 'base' }) : vx - vy) * dir || y.bValue - x.bValue;
+    });
+    const profit = P.total - P.cost, pctAll = P.cost ? (profit / P.cost) * 100 : null;
+    const sign = (v) => (masked() ? '••' : (v >= 0 ? '+' : '−') + money(Math.abs(v)));
+    const stat = (label, val, cls = '') => `<div class="card"><p class="text-xs text-slate-500">${label}</p><p class="text-xl font-bold mt-1 tabular-nums ${cls}">${val}</p></div>`;
+    const byBroker = new Map(), byCur = new Map();
+    P.items.forEach((i) => {
+      i.brokers.forEach((b) => { const g = byBroker.get(b.platform) || { key: b.platform, value: 0 }; g.value += b.bValue; byBroker.set(b.platform, g); });
+      const g = byCur.get(i.currency) || { key: i.currency, value: 0, native: 0 }; g.value += i.bValue; g.native += i.priced ? i.value : 0; byCur.set(i.currency, g);
+    });
+    const donut = (title, groups, dim) => {
+      const sl = foldSlices(sortGroups([...groups.values()], dim, 'value'), dim);
+      if (dim === 'currency') sl.forEach((x) => { const g = groups.get(x.key); if (g && x.key !== '__other') x.native = g.native; }); // felia USD în $, EUR în €
+      return `<section class="card"><h3 class="font-semibold mb-3">${title}</h3><div class="grid gap-4 sm:grid-cols-[10rem_1fr] items-center">
+        <div class="mx-auto w-40 max-w-full">${donutSvg(sl, P.total, 'Acțiuni')}</div>${pieLegend(sl, P.total)}</div></section>`;
+    };
+    const th = (key, label, cls = '') => sortTh('sortPortfolio', key, label, srt, '', cls);
+    return sectionHeader('Portofoliu de acțiuni', `${mineOnly() ? 'Partea ta din ' : ''}${P.items.length} simboluri · ${P.accounts} conturi de broker`, null, currencySwitch()) + `
+      <div class="grid gap-4 grid-cols-2 lg:grid-cols-4">
+        ${stat('Valoare acțiuni', money(P.total))}
+        ${stat('Cost (preț mediu)', money(P.cost))}
+        ${stat('Profit', `${sign(profit)}${pctAll != null ? ` <span class="text-sm">(${pctAll >= 0 ? '▲' : '▼'} ${Math.abs(pctAll).toFixed(1)}%)</span>` : ''}`, profit >= 0 ? 'text-emerald-700' : 'text-rose-600')}
+        ${stat('Numerar în conturi', money(P.cash))}
+      </div>
+      <div class="grid gap-4 lg:grid-cols-2 mt-4">${profitBarsCard(P)}${profitLineCard()}</div>
+      <div class="grid gap-4 lg:grid-cols-2 mt-4">${donut('Pe broker', byBroker, 'institution')}${donut('Pe monedă', byCur, 'currency')}</div>
+      <section class="card mt-4">
+        <h3 class="font-semibold mb-3">Toate pozițiile</h3>
+        <div class="overflow-x-auto -mx-1"><table class="matrix w-full text-xs sm:text-sm">
+          <thead><tr>${th('symbol', 'Simbol', 'text-left')}${th('qty', 'Cant.')}${th('avg', 'Preț mediu')}${th('price', 'Preț')}${th('value', 'Valoare')}${th('profit', 'Profit')}${th('pct', '%')}${th('weight', 'Pondere')}</tr></thead>
+          <tbody>${items.map((i) => `<tr>
+            <td class="text-left"><span class="font-medium">${esc(i.symbol)}</span>
+              <div class="text-xs text-slate-500 whitespace-normal">${i.brokers.map((b) => `${esc(b.name)} ${fmtQty(b.qty)}`).join(' · ')}</div></td>
+            <td>${fmtQty(i.qty)}</td><td>${i.avg ? money(i.avg, i.currency) : '—'}</td>
+            <td>${i.price != null ? money(i.price, i.currency) : '<span class="text-rose-600">#N/A</span>'}</td>
+            <td class="font-semibold">${i.priced ? money(i.bValue) : '—'}</td>
+            <td class="${i.bProfit == null ? '' : i.bProfit >= 0 ? 'text-emerald-700' : 'text-rose-600'}">${i.bProfit == null ? '—' : sign(i.bProfit)}</td>
+            <td class="${i.pct == null ? '' : i.pct >= 0 ? 'text-emerald-700' : 'text-rose-600'}">${i.pct == null ? '—' : `${i.pct >= 0 ? '▲' : '▼'} ${Math.abs(i.pct).toFixed(1)}%`}</td>
+            <td><span class="inline-flex items-center gap-2 justify-end w-full"><span class="hidden sm:inline-block w-14 h-1.5 rounded-full bg-slate-100 overflow-hidden"><span class="block h-full bg-teal-600" style="width:${Math.min(100, i.weight).toFixed(1)}%"></span></span>${i.weight.toFixed(1)}%</span></td>
+          </tr>`).join('')}</tbody>
+          <tfoot><tr><td class="text-left">${items.length} poziții</td><td></td><td></td><td></td><td>${money(P.total)}</td><td>${sign(profit)}</td><td>${pctAll != null ? `${pctAll.toFixed(1)}%` : ''}</td><td>100%</td></tr></tfoot>
+        </table></div>
+        <p class="text-xs text-slate-500 mt-2">Valorile sunt convertite în ${esc(dispCur())}; prețurile și prețul mediu rămân în moneda acțiunii. Sub fiecare simbol: câte acțiuni ai la fiecare broker.</p>
+      </section>`;
+  }
+
+  function sheetTemplate(brokers) {
+    const txt = (v) => ({ userEnteredValue: { stringValue: v } });
+    const fx = (v) => ({ userEnteredValue: { formulaValue: v } });
+    const headFmt = { userEnteredFormat: { textFormat: { bold: true }, backgroundColor: { red: 0.88, green: 0.96, blue: 0.94 } } };
+    const header = ['Broker', 'Simbol (Google Finance)', 'Cantitate', 'Preț mediu', 'Monedă', 'Preț curent', 'Valoare', 'Cost', 'Profit', 'Profit %']
+      .map((h) => Object.assign(txt(h), headFmt));
+    const validation = brokers.length ? { condition: { type: 'ONE_OF_LIST', values: brokers.map((b) => ({ userEnteredValue: b })) }, showCustomUi: true, strict: false } : null;
+    const rows = [{ values: header }];
+    for (let i = 2; i <= SHEET_ROWS + 1; i++) {
+      rows.push({ values: [
+        validation ? { dataValidation: validation } : {}, {}, {}, {},
+        fx(`=IF(B${i}="","",IFERROR(GOOGLEFINANCE(B${i},"currency"),""))`),
+        fx(`=IF(B${i}="","",IFERROR(GOOGLEFINANCE(B${i}),"#N/A"))`),
+        fx(`=IF(OR(B${i}="",NOT(ISNUMBER(F${i}))),"",C${i}*F${i})`),
+        fx(`=IF(B${i}="","",C${i}*D${i})`),
+        fx(`=IF(OR(G${i}="",H${i}=""),"",G${i}-H${i})`),
+        fx(`=IF(OR(I${i}="",H${i}=0),"",I${i}/H${i})`)
+      ] });
+    }
+    const help = [
+      'Cum completezi foaia „Detineri” (doar coloanele A–D; restul se calculează singur):',
+      'A · Broker — alege din listă contul din aplicație (ex. Trading 212). O acțiune deținută la doi brokeri = două rânduri.',
+      'B · Simbol în format Google Finance: NASDAQ:AAPL, NYSE:KO, ETR:VWCE (Xetra), AMS:IWDA, LON:VUSA, CURRENCY:BTCUSD (crypto).',
+      'C · Cantitate (se acceptă fracțiuni, ex. 1.25).  D · Prețul mediu de cumpărare, în moneda acțiunii.',
+      'Din exportul Yahoo: Symbol → B (adaugă bursa, ex. VWCE.DE → ETR:VWCE), Quantity → C, Purchase Price → D.',
+      'Dacă Preț curent arată #N/A, simbolul nu e recunoscut de Google Finance (ex. multe acțiuni BVB) — trece-l manual în aplicație.',
+      'Aplicația citește foaia automat (la deschidere, cel mult o dată la 15 minute) și pune valoarea la fiecare cont: acțiuni + numerar.',
+      'Nu redenumi foaia „Detineri” și nu muta coloanele.'
+    ];
+    return {
+      properties: { title: 'Patrimoniu Familial – Dețineri', locale: 'en_US', timeZone: 'Europe/Bucharest' },
+      sheets: [
+        { properties: { title: SHEET_TAB, gridProperties: { frozenRowCount: 1, rowCount: SHEET_ROWS + 1, columnCount: 10 } }, data: [{ startRow: 0, startColumn: 0, rowData: rows }] },
+        { properties: { title: 'Ajutor' }, data: [{ startRow: 0, startColumn: 0, rowData: help.map((l) => ({ values: [txt(l)] })) }] }
+      ]
+    };
+  }
+
+  // Dă fiecărui cont de acțiuni un nume unic pentru coloana Broker (ex. două conturi XTB → „XTB (USD)” și „XTB (EUR)”).
+  function assignBrokerNames(d) {
+    const accs = d.investment_accounts.filter((a) => !Calc.isDeposit(a.account_type) && !Calc.isBond(a.account_type));
+    const count = {};
+    accs.forEach((a) => { const k = brokerKey(a.platform); count[k] = (count[k] || 0) + 1; });
+    const used = new Set(accs.filter((a) => a.sheet_broker).map((a) => brokerKey(a.sheet_broker)));
+    accs.filter((a) => !a.sheet_broker).forEach((a) => {
+      let name = a.platform || 'Cont';
+      if (count[brokerKey(a.platform)] > 1) name = `${a.platform} (${[a.currency, Calc.isCrypto(a.account_type) ? 'crypto' : ''].filter(Boolean).join(', ')})`;
+      let n = name, i = 2;
+      while (used.has(brokerKey(n))) n = `${name} ${i++}`;
+      used.add(brokerKey(n));
+      a.sheet_broker = n;
+    });
+  }
+
+  async function holdingsCreate() {
+    if (!(await confirmDialog('Creează sheet-ul de dețineri', 'Aplicația creează în Google Drive-ul tău un Google Sheet „Patrimoniu Familial – Dețineri”, cu lista conturilor de broker în coloana Broker și formulele GOOGLEFINANCE gata puse. Tu completezi doar Broker, Simbol, Cantitate și Preț mediu.', 'Creează'))) return;
+    try {
+      if (!(await ensureFileScope())) return;
+      commit((d) => assignBrokerNames(d), null);
+      const ss = await DriveSync.createSpreadsheet(sheetTemplate(holdingsAccounts().map(brokerName)));
+      commit((d) => { d.metadata.holdings_sheet = { id: ss.spreadsheetId, name: (ss.properties && ss.properties.title) || 'Dețineri' }; }, null);
+      render();
+      toast('Sheet-ul a fost creat. Deschide-l din Setări → Dețineri și completează acțiunile.', 'success', 7000);
+    } catch (e) { toast(e.status === 403 ? 'Google Sheets API nu e activat în Google Cloud (vezi instrucțiunile).' : e.message, 'error', 8000); }
+  }
+
+  async function holdingsPick() {
+    if (!apiKey()) { toast('Lipsește cheia Google API.', 'error'); return; }
+    try {
+      if (!(await ensureFileScope())) return;
+      const f = await DriveSync.pickFile({ apiKey: apiKey(), appId: clientId().split('-')[0], mimeTypes: SHEET_MIME, title: 'Alege sheet-ul cu deținerile' });
+      if (!f) return;
+      commit((d) => { d.metadata.holdings_sheet = { id: f.id, name: f.name }; }, null);
+      await readHoldings({ manual: true });
+    } catch (e) { toast(e.message, 'error', 6000); }
+  }
+
+  /** Citește sheet-ul și actualizează deținerile + valoarea fiecărui cont de broker. */
+  async function readHoldings({ manual = false } = {}) {
+    const sh = M().holdings_sheet;
+    if (!sh || !sh.id || !isAdmin()) return;
+    if (!(DriveSync.hasValidToken() && DriveSync.hasFileScope())) {
+      if (!manual) return;
+      if (!(await ensureFileScope())) return;
+    }
+    const rows = await DriveSync.readSheet(sh.id, `${SHEET_TAB}!A2:J${SHEET_ROWS + 1}`);
+    settings.lastSheetRead = Date.now(); saveSettings();
+    const groups = new Map();
+    const bad = [], noRate = new Set();
+    rows.forEach((r) => {
+      const broker = String(r[0] == null ? '' : r[0]).trim(), symbol = String(r[1] == null ? '' : r[1]).trim();
+      const qty = typeof r[2] === 'number' ? r[2] : parseFloat(String(r[2] || '').replace(',', '.'));
+      if (!broker || !symbol || !(qty > 0)) return;
+      let avg = typeof r[3] === 'number' ? r[3] : parseFloat(String(r[3] || '').replace(',', '.')) || 0;
+      let cur = String(r[4] || '').trim().toUpperCase();
+      let price = typeof r[5] === 'number' ? r[5] : null;
+      if (cur === 'GBX') { cur = 'GBP'; if (price != null) price /= 100; avg /= 100; } // bursa din Londra cotează în penny
+      if (price == null) bad.push(symbol);
+      const k = brokerKey(broker);
+      if (!groups.has(k)) groups.set(k, { name: broker, items: [] });
+      groups.get(k).items.push({ symbol, qty, avg, price, currency: cur });
+    });
+    const accs = holdingsAccounts();
+    const byKey = new Map(accs.map((a) => [brokerKey(brokerName(a)), a]));
+    const unmatched = [...groups.entries()].filter(([k]) => !byKey.has(k)).map(([, g]) => g.name);
+    const now = new Date().toISOString();
+    const updates = [];
+    let structural = false;
+    accs.forEach((a) => {
+      const g = groups.get(brokerKey(brokerName(a)));
+      if (!g && !(a.holdings || []).length) return; // contul nu folosește sheet-ul
+      const holdings = (g ? g.items : []).map((h) => {
+        const currency = h.currency || a.currency;
+        return { symbol: h.symbol, qty: h.qty, avg: h.avg, price: h.price, currency,
+          value: h.price != null ? Math.round(h.qty * h.price * 100) / 100 : null, cost: Math.round(h.qty * h.avg * 100) / 100 };
+      });
+      let total = Calc.num(a.cash_amount);
+      let missing = false;
+      holdings.forEach((h) => {
+        if (h.value == null) return;
+        if (h.currency !== a.currency && (!canConv(h.currency) || !canConv(a.currency))) { noRate.add(h.currency); missing = true; return; }
+        total += h.currency === a.currency ? h.value : convCur(h.value, h.currency, a.currency);
+      });
+      // Fără curs pentru o monedă, valoarea contului nu se recalculează (ar ieși mai mică decât e).
+      total = missing ? Calc.num(a.total_value) : Math.round(total * 100) / 100;
+      const shape = (list) => FWMerge.stable((list || []).map((h) => [h.symbol, h.qty, h.avg]).sort());
+      if (shape(holdings) !== shape(a.holdings)) structural = true;
+      if (FWMerge.stable(holdings) !== FWMerge.stable(a.holdings || []) || total !== Calc.num(a.total_value)) updates.push({ id: a.id, holdings, total });
+    });
+    const matched = [...groups.entries()].filter(([gk]) => byKey.has(gk)).map(([gk, g]) => `${brokerName(byKey.get(gk))}: ${g.items.length}`);
+    state.sheetInfo = { at: Date.now(), rows: rows.filter((r) => String(r[0] || '').trim() || String(r[1] || '').trim()).length,
+      positions: [...groups.values()].reduce((n, g) => n + g.items.length, 0), matched, unmatched, bad, noRate: [...noRate] };
+    if (updates.length) {
+      commit((d) => {
+        updates.forEach((u) => { const x = d.investment_accounts.find((y) => y.id === u.id); if (x) Object.assign(x, { holdings: u.holdings, total_value: u.total, holdings_at: now }); });
+        if (structural) {
+          const who = currentMember();
+          d.changelog = (d.changelog || []).concat([{ id: `log_${Date.now().toString(36)}_s`, at: now, by: who ? who.name : 'Automat', action: 'edit', collection: 'investment_accounts',
+            label: 'Dețineri din Google Sheets', detail: `${updates.length} ${updates.length === 1 ? 'cont actualizat' : 'conturi actualizate'}` }]).slice(-300);
+        }
+      }, null, { log: false });
+    } else if (manual) render();
+    if (manual) {
+      const i = state.sheetInfo;
+      if (!i.rows) toast('Sheet-ul nu are rânduri completate în foaia „Detineri” (coloanele A–D).', 'error', 8000);
+      else if (!i.positions) toast(`Am găsit ${i.rows} rânduri, dar niciunul complet: trebuie Broker, Simbol și Cantitate > 0.`, 'error', 9000);
+      else if (unmatched.length && !i.matched.length) toast(`Niciun broker din sheet nu se potrivește cu un cont: ${unmatched.join(', ')}. Alege numele din lista derulantă din coloana Broker.`, 'error', 10000);
+      else toast(`${updates.length ? `Dețineri actualizate (${updates.length} conturi).` : 'Deținerile sunt deja la zi.'}${unmatched.length ? ` Fără cont: ${unmatched.join(', ')}.` : ''}${bad.length ? ` Simboluri necunoscute: ${bad.join(', ')}.` : ''}`,
+        unmatched.length || bad.length ? 'info' : 'success', unmatched.length || bad.length ? 9000 : 4000);
+      if (state.view === 'settings') render();
+    }
+  }
+  function maybeReadHoldings() {
+    if (!isAdmin() || !M().holdings_sheet || !navigator.onLine) return;
+    if (Date.now() - (settings.lastSheetRead || 0) < 15 * 60e3) return;
+    readHoldings().catch(() => { /* reîncearcă data viitoare */ });
+  }
+
+  function holdingsSectionHtml() {
+    const sh = M().holdings_sheet;
+    const info = state.sheetInfo;
+    if (!sh || !sh.id) {
+      return `<p class="text-sm text-slate-500 mt-1">Ții acțiunile într-un Google Sheet (Broker · Simbol · Cantitate · Preț mediu), prețurile vin din Google Finance, iar aplicația calculează singură valoarea fiecărui cont de broker și profitul.</p>
+        <div class="flex flex-wrap gap-2 mt-3">
+          <button data-action="holdingsCreate" class="btn-primary" ${settings.driveConnected ? '' : 'disabled'}>📊 Creează sheet-ul de dețineri</button>
+          <button data-action="holdingsPick" class="btn-secondary" ${settings.driveConnected ? '' : 'disabled'}>📂 Alege un sheet existent</button>
+        </div>
+        ${settings.driveConnected ? '' : '<p class="text-xs text-slate-500 mt-2">Conectează întâi Google Drive.</p>'}`;
+    }
+    return `<p class="text-sm mt-2"><a href="${sheetUrl(sh.id)}" target="_blank" rel="noopener" class="text-teal-700 font-medium underline">📊 ${esc(sh.name || 'Sheet dețineri')}</a>
+        <span class="text-slate-500">· ${settings.lastSheetRead ? `citit ${esc(new Date(settings.lastSheetRead).toLocaleString('ro-RO'))}` : 'necitit încă'}</span></p>
+      ${info ? `<p class="text-sm mt-2">Ultima citire: <strong>${info.rows}</strong> rânduri, <strong>${info.positions}</strong> poziții complete${info.matched.length ? ` · ${esc(info.matched.join(' · '))}` : ''}</p>` : ''}
+      ${info && (info.unmatched.length || info.bad.length || info.noRate.length) ? `<div class="alert-yellow text-sm mt-2 space-y-1">
+        ${info.unmatched.length ? `<p>Broker(i) din sheet fără cont în aplicație: <strong>${esc(info.unmatched.join(', '))}</strong> — setează „Nume în sheet” la contul potrivit.</p>` : ''}
+        ${info.bad.length ? `<p>Simboluri necunoscute pentru Google Finance: <strong>${esc(info.bad.join(', '))}</strong></p>` : ''}
+        ${info.noRate.length ? `<p>Lipsește cursul pentru: <strong>${esc(info.noRate.join(', '))}</strong> — adaug-o la Cursuri valutare.</p>` : ''}</div>` : ''}
+      <p class="text-xs text-slate-500 mt-2">Nume în coloana Broker: ${holdingsAccounts().map((a) => `<code>${esc(brokerName(a))}</code>`).join(', ') || '—'}</p>
+      <div class="flex flex-wrap gap-2 mt-3">
+        <a href="${sheetUrl(sh.id)}" target="_blank" rel="noopener" class="btn-primary">✏️ Deschide sheet-ul</a>
+        <button data-action="holdingsRead" class="btn-secondary">↻ Actualizează acum</button>
+        <button data-action="holdingsShare" class="btn-secondary" ${settings.driveConnected ? '' : 'disabled'}>➕ Dă acces</button>
+        <button data-action="holdingsDisconnect" class="btn-ghost text-rose-600">Deconectează</button>
+      </div>`;
+  }
+
+  function holdingsShareForm() {
+    const sh = M().holdings_sheet;
+    if (!sh) return;
+    openModal({
+      title: '➕ Dă acces la sheet-ul de dețineri',
+      body: `<label class="field text-sm"><span class="field-label">Emailul Google al persoanei *</span><input name="email" type="email" class="input" required placeholder="nume@gmail.com"></label>`,
+      submitLabel: 'Dă acces',
+      onSubmit: async (form) => {
+        const email = form.email.value.trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showFormErrors(['Adresă de email invalidă.']); return false; }
+        try { if (!(await ensureFileScope())) return false; await DriveSync.shareFile(sh.id, email); toast(`${email} are acces la sheet.`, 'success'); return true; }
+        catch (e) { showFormErrors([e.message]); return false; }
+      }
+    });
+  }
+
   /* ---------- Actualizare rapidă a soldurilor ---------- */
   function renderUpdate() {
     const mine = mineOnly(), me = state.profileId;
@@ -2425,6 +2893,11 @@
         <button data-action="nav" data-view="members" class="btn-secondary btn-sm mt-3">Gestionează parolele →</button>
       </section>
 
+      <section class="card lg:col-span-2">
+        <h3 class="font-semibold">📊 Dețineri de acțiuni (Google Sheets)</h3>
+        ${holdingsSectionHtml()}
+      </section>
+
       <section class="card">
         <h3 class="font-semibold">🎨 Aspect</h3>
         <p class="text-sm text-slate-500 mt-1">Tema se salvează pe acest dispozitiv.</p>
@@ -2492,7 +2965,7 @@
   const VIEWS = {
     dashboard: renderDashboard, myassets: renderMyAssets, analysis: renderAnalysis,
     investments: renderInvestments, grandparents: renderGrandparents, realestate: renderRealEstate,
-    children: renderChildren, vehicles: renderVehicles, update: renderUpdate, crypto: () => renderInvestments({ crypto: true }), guide: renderGuide, members: renderMembers, settings: renderSettings
+    children: renderChildren, vehicles: renderVehicles, update: renderUpdate, portfolio: renderPortfolio, crypto: () => renderInvestments({ crypto: true }), guide: renderGuide, members: renderMembers, settings: renderSettings
   };
 
   function render() {
@@ -2518,7 +2991,7 @@
     state.view = 'dashboard';
     window.scrollTo(0, 0);
     render();
-    if (m && m.role === 'admin') { setSync(state.sync.status, state.sync.message); maybeAutoRates(); }
+    if (m && m.role === 'admin') { setSync(state.sync.status, state.sync.message); maybeAutoRates(); setTimeout(maybeReadHoldings, 800); }
   }
 
   function selectProfile(id) {
@@ -2698,6 +3171,19 @@
     toggleMask: () => { settings.hideAmounts = !settings.hideAmounts; saveSettings(); render(); },
     setDisplayCurrency: (ds) => { settings.displayCurrency = ds.value; saveSettings(); render(); },
     addCrypto: () => openForm('investment_accounts', null, { account_type: 'Crypto (Bitcoin, Ethereum etc.)' }),
+    toggleHoldings: (ds) => { settings.holdingsOpen = Object.assign({}, settings.holdingsOpen, { [ds.id]: !(settings.holdingsOpen || {})[ds.id] }); saveSettings(); render(); },
+    sortPortfolio: (ds) => { settings.portfolioSort = nextSort(Object.assign({ key: 'value', dir: 'desc' }, settings.portfolioSort || {}), ds.value, ['symbol']); saveSettings(); render(); },
+    sortHoldings: (ds) => { settings.holdingsSort = nextSort(Object.assign({ key: 'value', dir: 'desc' }, settings.holdingsSort || {}), ds.value, ['symbol']); saveSettings(); render(); },
+    sortMatrix: (ds) => updateAnalysis(() => { analysis.matrixSort = nextSort(Object.assign({ key: 'total', dir: 'desc' }, analysis.matrixSort || {}), ds.value, ['name']); }),
+    holdingsCreate: () => holdingsCreate(),
+    holdingsPick: () => holdingsPick(),
+    holdingsRead: () => readHoldings({ manual: true }).catch((e) => toast(e.status === 403 ? 'Fără acces la sheet sau Google Sheets API neactivat.' : e.message, 'error', 7000)),
+    holdingsShare: () => holdingsShareForm(),
+    holdingsDisconnect: async () => {
+      if (await confirmDialog('Deconectează sheet-ul', 'Aplicația nu mai citește sheet-ul. Deținerile și valorile actuale rămân; sheet-ul rămâne în Drive.', 'Deconectează')) {
+        commit((d) => { delete d.metadata.holdings_sheet; }, 'Sheet deconectat.');
+      }
+    },
     renewDeposit: (ds) => renewDepositForm(ds.id),
     exportIcs: () => exportIcs(),
     ratesNow: () => updateRates({ manual: true }).catch((e) => toast(e.message, 'error')),
@@ -2984,7 +3470,7 @@
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && state.data && applyRollovers(D())) { saveData(D()); render(); }
     if (document.visibilityState === 'visible' && state.data && settings.driveConnected && navigator.onLine && !pendingPush && !state.modal) {
-      if (DriveSync.hasValidToken()) runSync(); else setSync('auth', 'Atinge pentru a sincroniza cu Google Drive');
+      if (DriveSync.hasValidToken()) { runSync(); setTimeout(maybeReadHoldings, 1500); } else setSync('auth', 'Atinge pentru a sincroniza cu Google Drive');
     }
   });
   // Sincronizare între tab-uri deschise pe același dispozitiv
@@ -3024,6 +3510,7 @@
     saveData(state.data);
     loadBase();
     setTimeout(maybeAutoRates, 500);
+    setTimeout(maybeReadHoldings, 1500);
     let pid = null;
     try { pid = localStorage.getItem(LS.PROFILE); } catch (e) { /* ignore */ }
     const m = pid && member(pid);

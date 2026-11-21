@@ -9,9 +9,9 @@
 (function (global) {
   'use strict';
 
-  const COLLECTIONS = ['family_members', 'investment_accounts', 'grandparents_accounts', 'real_estate', 'children_savings', 'vehicles', 'goals', 'history', 'changelog'];
+  const COLLECTIONS = ['family_members', 'investment_accounts', 'grandparents_accounts', 'real_estate', 'children_savings', 'vehicles', 'goals', 'history', 'changelog', 'pf_history'];
   // Colecții tehnice: fără updated_at și fără mesaj de conflict (istoricul lunar, jurnalul).
-  const QUIET = ['history', 'changelog'];
+  const QUIET = ['history', 'changelog', 'pf_history'];
   const STAMPED = COLLECTIONS.filter((c) => !QUIET.includes(c));
 
   /** JSON cu chei sortate — pentru comparații independente de ordinea cheilor. */
