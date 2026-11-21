@@ -133,3 +133,46 @@ test('panou: alertele și obiectivele sunt la final', async () => {
   assert.equal(Math.min(iAlerts, iGoals), titles.length - 2, 'ultimele două carduri');
 });
 
+
+test('bunicii nu intră în totalul de pe Panou; comutatorul „Include bunicii” îi adaugă; Analiza rămâne completă', async () => {
+  const app = await boot({ data: makeFamily() });
+  const num = (t) => parseFloat(t.replace(/[^\d]/g, ''));
+  const hero = () => num(app.q('.text-4xl').textContent);
+  const fam = app.w.Calc.netWorth(app.stored()).total;
+  const bunica = 20000 * 5 * 0.85; // 85% din Fidelis-ul comun (20.000 EUR × 5)
+  assert.ok(Math.abs(hero() - (fam - bunica)) <= 1, `fără Bunica Elena: ${hero()} vs ${fam - bunica}`);
+  assert.ok(app.text().includes('fără Bunica Elena'));
+  app.click(app.q('[data-action="toggleDashAll"]')); await wait(20);
+  assert.ok(Math.abs(hero() - fam) <= 1, 'cu bunicii: totalul complet');
+  app.click(app.q('[data-action="toggleDashAll"]')); await wait(20);
+  await app.nav('analysis');
+  assert.ok(app.text().includes('Bunica Elena'), 'Analiza îi include');
+  await app.nav('members');
+  const card = app.qa('#app [data-action="edit"][data-collection="family_members"]');
+  app.click(card[0]); await wait(40);
+  assert.equal(app.modal().querySelector('[data-path="in_family_total"]').checked, true, 'Andrei (admin): bifat implicit');
+});
+
+test('panou pe telefon: tile-urile pe categorii au lățime egală (2 coloane, butoane pe toată celula)', async () => {
+  const app = await boot({ data: makeFamily() });
+  const tiles = app.qa('#app section.grid button.card');
+  assert.ok(tiles.length >= 5 && tiles.every((b) => b.classList.contains('w-full') && b.classList.contains('min-w-0')));
+  assert.ok(tiles[0].parentElement.className.includes('grid-cols-2'));
+});
+
+test('Panou: categoria „Copii” = tot ce e pe numele copiilor, fără suprapuneri cu celelalte categorii', async () => {
+  const app = await boot({ data: makeFamily(), settings: { dashIncludeAll: true } });
+  const num = (t) => parseFloat(t.replace(/[^\d]/g, ''));
+  const tiles = app.qa('#app section.grid button.card');
+  const kid = tiles.find((b) => b.querySelector('span').textContent === 'Copii');
+  assert.ok(kid, 'tile „Copii”');
+  // Mara: Fidelis 6.000 EUR (30.000 RON) + BT economii 10.000 + Cont Centenar 5.000 = 45.000 RON
+  assert.ok(kid.textContent.replace(/\s/g, ' ').includes('45.000'), kid.textContent);
+  assert.ok(kid.textContent.includes('3 conturi pe numele lor'));
+  const total = num(app.q('.text-4xl').textContent);
+  const sumTiles = tiles.reduce((t, b) => t + num(b.querySelector('p').textContent), 0);
+  assert.ok(Math.abs(sumTiles - total) <= tiles.length, `tile-urile adunate = totalul (${sumTiles} vs ${total})`);
+  assert.ok(app.qa('.pie-wrap path, .pie-wrap circle').some((p) => p.getAttribute('data-tip').startsWith('Copii ·')), 'felie „Copii” în grafic');
+  await app.nav('analysis');
+  assert.ok(app.q('[data-action="toggleCat"][data-value="children_savings"]').textContent.includes('Economii copii'), 'Analiza păstrează categoriile clasice');
+});

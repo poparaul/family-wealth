@@ -5,7 +5,7 @@
   /* ======================================================================
      CONFIGURARE
      ====================================================================== */
-  const APP_VERSION = 'v38'; // = CACHE din sw.js
+  const APP_VERSION = 'v41'; // = CACHE din sw.js
   const CONFIG = {
     // Opțional: pune aici OAuth Client ID-ul ca să nu-l introduci manual pe fiecare dispozitiv.
     // Ex: '1234567890-abc.apps.googleusercontent.com'
@@ -883,10 +883,11 @@
     },
     family_members: {
       singular: 'membru', prefix: 'mem',
-      defaults: () => ({ name: '', role: 'viewer' }),
+      defaults: () => ({ name: '', role: 'viewer', in_family_total: null }),
       fields: [
         { k: 'name', label: 'Nume afișat', type: 'text', req: true, wide: true },
-        { k: 'role', label: 'Rol', type: 'select', req: true, wide: true, options: Object.keys(ROLE_LABELS).map((r) => [r, `${ROLE_LABELS[r]} — ${ROLE_HINTS[r]}`]) }
+        { k: 'role', label: 'Rol', type: 'select', req: true, wide: true, options: Object.keys(ROLE_LABELS).map((r) => [r, `${ROLE_LABELS[r]} — ${ROLE_HINTS[r]}`]) },
+        { k: 'in_family_total', label: 'Inclus în averea familiei de pe Panou (debifează pentru bunici; în Analiză apare oricum)', type: 'checkbox' }
       ]
     }
   };
@@ -1053,6 +1054,7 @@
     const existing = id ? D()[collection].find((x) => x.id === id) : null;
     if (id && !existing) return;
     const item = existing ? clone(existing) : Object.assign(schema.defaults(), preset || {});
+    if (collection === 'family_members' && item.in_family_total == null) item.in_family_total = item.role !== 'viewer'; // valoarea folosită efectiv
     const body = `
       <div class="grid gap-3 sm:grid-cols-2">
         ${schema.fields.map((f) => fieldHtml(f, item)).join('')}
@@ -1336,13 +1338,37 @@
     return `<div class="space-y-3">${rHtml}${vHtml}${mHtml}</div>`;
   }
 
+  // Membrii scoși din totalul de pe Panou: bifa lor explicită, altfel implicit cei cu rol „Vizualizare” (bunicii).
+  const inFamilyTotal = (m) => (m.in_family_total != null ? !!m.in_family_total : m.role !== 'viewer');
+  const excludedMembers = () => D().family_members.filter((m) => !inFamilyTotal(m));
+  const dashExcluded = () => (settings.dashIncludeAll ? new Set() : new Set(excludedMembers().map((m) => m.id)));
+
+  /** Ca Calc.netWorth, dar fără membrii scoși din totalul familiei (Panou). */
+  const kidIds = () => new Set(D().family_members.filter((m) => m.role === 'viewer_restricted').map((m) => m.id));
+  // Pe Panou, categoria „Copii” = tot ce e pe numele copiilor (orice tip de cont); celelalte categorii = restul familiei.
+  const dashLabel = (c) => (c === 'children_savings' ? 'Copii' : Calc.CATEGORIES[c].label);
+  function familyWorth(excluded) {
+    const kids = kidIds();
+    const rows = Calc.shareRows(D()).filter((r) => !excluded.has(r.member_id));
+    const byCat = {}, byMember = {};
+    let unallocated = 0;
+    rows.forEach((r) => {
+      const cat = kids.has(r.member_id) ? 'children_savings' : r.cat;
+      byCat[cat] = (byCat[cat] || 0) + r.value;
+      if (r.member_id === Calc.UNALLOCATED) unallocated += r.value; else byMember[r.member_id] = (byMember[r.member_id] || 0) + r.value;
+    });
+    const assets = Calc.assets(D()).filter((a) => !a.holders.length || a.holders.some((h) => !excluded.has(h.member_id)));
+    return { total: sum(rows.map((r) => r.value)), byCat, byMember, unallocated, assets };
+  }
+
   function renderDashboard() {
     if (!isAdmin()) return renderViewerDashboard();
     const mine = mineOnly();
     const me = currentMember();
-    const nw = mine ? myWorth(me.id) : Calc.netWorth(D());
+    const excluded = mine ? new Set() : dashExcluded();
+    const nw = mine ? myWorth(me.id) : familyWorth(excluded);
     const cats = Object.keys(Calc.CATEGORIES).filter((c) => nw.byCat[c] > 0);
-    const members = D().family_members.map((m) => ({ m, v: nw.byMember[m.id] || 0 })).sort((a, b) => b.v - a.v);
+    const members = D().family_members.filter((m) => !excluded.has(m.id)).map((m) => ({ m, v: nw.byMember[m.id] || 0 })).sort((a, b) => b.v - a.v);
     const maxV = Math.max(1, ...members.map((x) => x.v));
     const missingRates = nw.assets.filter((a) => !Calc.rateKnown(a.currency, M()));
 
@@ -1351,18 +1377,18 @@
         `<div class="flex flex-wrap items-center gap-2"><button data-action="nav" data-view="update" class="btn-secondary btn-sm no-print">✏️ Actualizează soldurile</button>${currencySwitch()}</div>`)}
       <div>
         <section class="card bg-gradient-to-br from-teal-700 to-teal-900 text-white border-0">
-          <p class="text-teal-100 text-sm">${mine ? `Averea ta (${esc(me.name)})` : 'Avere netă totală a familiei'}</p>
+          <p class="text-teal-100 text-sm">${mine ? `Averea ta (${esc(me.name)})` : 'Avere netă totală a familiei'}${excluded.size ? ` <span class="opacity-80">· fără ${esc(D().family_members.filter((m) => excluded.has(m.id)).map((m) => m.name).join(', '))}</span>` : ''}</p>
           <p class="text-4xl sm:text-5xl font-bold mt-1 tabular-nums">${money(nw.total)}</p>
           ${dispCur() !== baseCur() ? `<p class="text-teal-100 text-sm tabular-nums">≈ ${fmtMoney(nw.total, baseCur())}</p>` : ''}
           <p class="text-teal-100 text-sm mt-1">${nw.assets.length} active · EUR ${M().exchange_rates.EUR || '—'} · USD ${M().exchange_rates.USD || '—'}</p>
-          ${nw.total > 0 ? `<div class="flex h-3 gap-[2px] rounded-full overflow-hidden mt-5">${cats.map((c) => `<div data-tip="${Calc.CATEGORIES[c].label} · ${esc(money(nw.byCat[c]))} · ${Math.round((nw.byCat[c] / nw.total) * 100)}%" style="flex:${nw.byCat[c]} 0 0;background:${Calc.CATEGORIES[c].color}"></div>`).join('')}</div>
-          <ul class="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 mt-4 text-sm">${cats.map((c) => `<li class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full shrink-0 ring-2 ring-white/40" style="background:${Calc.CATEGORIES[c].color}"></span><span class="truncate">${Calc.CATEGORIES[c].label}</span><span class="ml-auto tabular-nums text-teal-50">${Math.round((nw.byCat[c] / nw.total) * 100)}%</span></li>`).join('')}</ul>` : ''}
+          ${nw.total > 0 ? `<div class="flex h-3 gap-[2px] rounded-full overflow-hidden mt-5">${cats.map((c) => `<div data-tip="${mine ? Calc.CATEGORIES[c].label : dashLabel(c)} · ${esc(money(nw.byCat[c]))} · ${Math.round((nw.byCat[c] / nw.total) * 100)}%" style="flex:${nw.byCat[c]} 0 0;background:${Calc.CATEGORIES[c].color}"></div>`).join('')}</div>
+          <ul class="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 mt-4 text-sm">${cats.map((c) => `<li class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full shrink-0 ring-2 ring-white/40" style="background:${Calc.CATEGORIES[c].color}"></span><span class="truncate">${mine ? Calc.CATEGORIES[c].label : dashLabel(c)}</span><span class="ml-auto tabular-nums text-teal-50">${Math.round((nw.byCat[c] / nw.total) * 100)}%</span></li>`).join('')}</ul>` : ''}
           ${missingRates.length ? `<p class="mt-4 text-sm bg-rose-500/30 rounded-lg px-3 py-2">⚠ ${missingRates.length} active au monede fără curs de schimb și nu sunt incluse. Adaugă cursul în Setări.</p>` : ''}
           ${nw.unallocated > 0.5 ? `<p class="mt-2 text-sm text-teal-100">Nealocat pe membri: ${money(nw.unallocated)}</p>` : ''}
         </section>
       </div>
       ${dashboardPieCard(nw, mine)}
-      <div class="grid gap-4 lg:grid-cols-2 mt-4">${historyCard(nw, mine)}${incomeCard(mine)}</div>
+      <div class="grid gap-4 lg:grid-cols-2 mt-4">${historyCard(nw, mine, excluded)}${incomeCard(mine, excluded)}</div>
       ${mine ? '' : `<section class="card mt-4">
         <div class="flex items-center justify-between gap-3 mb-4"><h3 class="font-semibold">Defalcare pe membri (Account Splitting)</h3>
           <button data-action="nav" data-view="analysis" class="btn-ghost btn-sm">🔎 Analiză detaliată →</button></div>
@@ -1373,13 +1399,17 @@
             <p class="text-xs text-slate-500 mt-1">${nw.total ? ((v / nw.total) * 100).toFixed(1) : 0}% din total · ${Calc.memberAssets(D(), m.id).length} active</p></div>
           </div></li>`).join('')}</ul>
       </section>`}
-      <section class="grid gap-4 sm:grid-cols-3 lg:grid-cols-6 mt-4">
+      <section class="grid gap-3 sm:gap-4 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 mt-4">
         ${Object.keys(Calc.CATEGORIES).map((c) => {
           const view = { investment_accounts: 'investments', crypto: 'crypto', grandparents_accounts: 'grandparents', real_estate: 'realestate', children_savings: 'children', vehicles: 'vehicles' }[c];
-          return `<button data-action="nav" data-view="${view}" class="card card-hover text-left">
-            <span class="text-xs font-medium" style="color:${Calc.CATEGORIES[c].color}">${Calc.CATEGORIES[c].label}</span>
-            <p class="text-xl font-bold mt-1 tabular-nums">${money(nw.byCat[c] || 0)}</p>
-            <p class="text-xs text-slate-500">${nw.assets.filter((a) => a.cat === c).length} înregistrări</p></button>`;
+          // „Copii”: tot ce e pe numele copiilor (orice tip de cont); restul categoriilor fără partea copiilor
+          const kids = c === 'children_savings' && !mine ? [...kidIds()] : null;
+          const value = nw.byCat[c] || 0;
+          const count = kids ? nw.assets.filter((a) => a.holders.some((h) => kids.includes(h.member_id))).length : nw.assets.filter((a) => a.cat === c).length;
+          return `<button data-action="nav" data-view="${view}" class="card card-hover text-left w-full min-w-0 h-full block" ${kids ? 'title="Toate conturile și investițiile copiilor"' : ''}>
+            <span class="block text-xs font-medium truncate" style="color:${Calc.CATEGORIES[c].color}">${kids ? 'Copii' : Calc.CATEGORIES[c].label}</span>
+            <p class="text-lg sm:text-xl font-bold mt-1 tabular-nums truncate">${money(value)}</p>
+            <p class="text-xs text-slate-500 truncate">${count} ${kids ? 'conturi pe numele lor' : 'înregistrări'}</p></button>`;
         }).join('')}
       </section>
       <div class="grid gap-4 lg:grid-cols-2 mt-4 items-start">
@@ -1401,11 +1431,12 @@
     return { total, byCat, byMember: { [id]: total }, unallocated: 0, assets: Calc.memberAssets(D(), id) };
   }
 
-  function historyCard(nw, mine) {
+  function historyCard(nw, mine, excluded = new Set()) {
     const me = state.profileId;
     const cur = Calc.monthKey(new Date());
+    const minus = (h) => [...excluded].reduce((t, id) => t + ((h.byMember || {})[id] || 0), 0);
     const pts = (D().history || []).filter((h) => h.id !== cur)
-      .map((h) => ({ date: h.id + '-01', balance: mine ? (h.byMember || {})[me] || 0 : h.total }));
+      .map((h) => ({ date: h.id + '-01', balance: mine ? (h.byMember || {})[me] || 0 : h.total - minus(h) }));
     pts.push({ date: cur + '-01', balance: nw.total });
     const shown = pts.map((p) => ({ date: p.date, balance: conv(p.balance) }));
     const last = pts[pts.length - 1].balance, prev = pts.length > 1 ? pts[pts.length - 2].balance : null;
@@ -1418,9 +1449,10 @@
     </section>`;
   }
 
-  function incomeCard(mine) {
+  function incomeCard(mine, excluded = new Set()) {
     const me = state.profileId;
-    const share = (e) => (mine ? (e.holders.find((h) => h.member_id === me) || { percentage: 0 }).percentage / 100 : 1);
+    const share = (e) => (mine ? (e.holders.find((h) => h.member_id === me) || { percentage: 0 }).percentage / 100
+      : excluded.size ? e.holders.filter((h) => !excluded.has(h.member_id)).reduce((t, h) => t + Calc.num(h.percentage), 0) / 100 : 1);
     const ev = Calc.incomeSchedule(D(), new Date(), 12).map((e) => Object.assign({}, e, { mine: e.base * share(e) })).filter((e) => e.mine > 0);
     const income = ev.filter((e) => e.kind !== 'principal');
     const total = sum(income.map((e) => e.mine));
@@ -1473,11 +1505,17 @@
       if (nw.unallocated > 0.5) groups.push({ key: Calc.UNALLOCATED, value: nw.unallocated });
     }
     const slices = foldSlices(sortGroups(groups, dim, ps.dashSort), dim);
+    if (dim === 'category' && !mine) {
+      slices.forEach((x) => { if (x.key === 'children_savings') x.meta = Object.assign({}, x.meta, { label: 'Copii' }); });
+      if (ps.dashSort === 'name') slices.sort((a, b) => (a.key === '__other') - (b.key === '__other') || a.meta.label.localeCompare(b.meta.label, 'ro')); // după eticheta afișată
+    }
     const dimBtn = (v, l) => `<button data-action="setPieDim" data-value="${v}" aria-pressed="${dim === v}" class="${dim === v ? 'cur-active' : ''}">${l}</button>`;
     return `<section class="card mt-4">
       <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
         <h3 class="font-semibold">Distribuția averii</h3>
         <div class="flex flex-wrap gap-2 no-print">
+          ${!mine && excludedMembers().length ? `<button data-action="toggleDashAll" role="switch" aria-checked="${!!settings.dashIncludeAll}" class="mine-switch ${settings.dashIncludeAll ? 'on' : ''}" title="Include în totalul de pe Panou și: ${esc(excludedMembers().map((m) => m.name).join(', '))}">
+            <span class="mine-track"><span class="mine-knob"></span></span><span>Include bunicii</span></button>` : ''}
           ${mine ? '' : `<div class="cur-switch" role="group" aria-label="Grupare">${dimBtn('category', 'Categorii')}${dimBtn('member', 'Membri')}</div>`}
           ${pieSortSwitch('dash', ps.dashSort)}
         </div>
@@ -3218,6 +3256,7 @@
   const actions = {
     nav: (ds) => { state.view = ds.view; state.userMenu = false; state.moreOpen = false; window.scrollTo(0, 0); render(); },
     checkUpdates: () => { state.userMenu = false; render(); checkForUpdates(); },
+    toggleDashAll: () => { settings.dashIncludeAll = !settings.dashIncludeAll; saveSettings(); render(); },
     toggleUserMenu: () => { state.userMenu = !state.userMenu; state.moreOpen = false; render(); },
     toggleMore: () => { state.moreOpen = !state.moreOpen; state.userMenu = false; render(); },
     closeMenus: () => { state.userMenu = false; state.moreOpen = false; render(); },
