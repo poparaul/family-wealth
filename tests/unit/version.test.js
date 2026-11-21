@@ -14,3 +14,9 @@ test('service worker-ul revalidează la server (ocolește cache-ul HTTP)', () =>
   const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
   assert.ok(sw.includes("fetch(req, { cache: 'no-cache' })"));
 });
+
+test('CSS: elementele din grile se pot îngusta (altfel textele lungi lățesc pagina pe telefon)', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'css/styles.css'), 'utf8');
+  assert.ok(css.includes('.grid > * { min-width: 0; }'));
+  assert.ok(/html, body \{ overflow-x: clip; \}/.test(css));
+});

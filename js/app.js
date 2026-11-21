@@ -5,7 +5,7 @@
   /* ======================================================================
      CONFIGURARE
      ====================================================================== */
-  const APP_VERSION = 'v41'; // = CACHE din sw.js
+  const APP_VERSION = 'v42'; // = CACHE din sw.js
   const CONFIG = {
     // Opțional: pune aici OAuth Client ID-ul ca să nu-l introduci manual pe fiecare dispozitiv.
     // Ex: '1234567890-abc.apps.googleusercontent.com'
@@ -29,7 +29,7 @@
   const NAV_ADMIN = [
     { id: 'dashboard', label: 'Panou', icon: '📊' },
     { id: 'analysis', label: 'Analiză avere', icon: '🔎' },
-    { id: 'portfolio', label: 'Portofoliu', icon: '📊' },
+    { id: 'portfolio', label: 'Portofoliu', icon: '💼' },
     { id: 'update', label: 'Actualizare', icon: '✏️' },
     { id: 'investments', label: 'Investiții', icon: '📈' },
     { id: 'crypto', label: 'Crypto', icon: '₿' },

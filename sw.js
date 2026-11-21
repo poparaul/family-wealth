@@ -1,5 +1,5 @@
 /* sw.js — funcționare 100% offline după prima încărcare */
-const CACHE = 'fw-pwa-v41'; // ține-l egal cu APP_VERSION din js/app.js (verificat de teste)
+const CACHE = 'fw-pwa-v42'; // ține-l egal cu APP_VERSION din js/app.js (verificat de teste)
 const SHELL = [
   './', './index.html', './manifest.json', './css/styles.css', './css/tailwind.css',
   './js/app.js', './js/merge.js', './js/vault.js', './js/drive-sync.js', './js/calculators.js',
