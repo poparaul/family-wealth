@@ -148,3 +148,23 @@ test('două conturi la același broker fără „Nume în sheet” salvat: potri
   assert.ok(cards.some((c) => c.textContent.includes('În sheet: XTB (USD)')) && cards.some((c) => c.textContent.includes('În sheet: XTB (EUR)')), 'numele din sheet apare pe card');
 });
 
+test('numele implicite se salvează la citirea sheet-ului; formularul arată numele folosit când câmpul e gol', async () => {
+  const drive = createDrive();
+  const data = makeFamily();
+  data.metadata.holdings_sheet = { id: 'S6', name: 'Dețineri' };
+  data.investment_accounts.push({ id: 'inv_xtb_usd', platform: 'XTB', account_type: 'Acțiuni', total_value: 0, currency: 'USD', notes: '', splits: [{ member_id: 'm_a', percentage: 100 }] });
+  drive.st.sheets.set('S6', { values: [['XTB (USD)', 'NYSE:KO', 1, 60, 'USD', 70]] });
+  const app = await boot({ data, drive, settings: connected });
+  await app.nav('investments');
+  const card = app.qa('#app article.card').find((a) => a.textContent.includes('XTB') && a.textContent.includes('USD'));
+  app.click(card.querySelector('[data-action="edit"]')); await wait(50);
+  const field = app.modal().querySelector('[data-path="sheet_broker"]');
+  assert.equal(field.value, '');
+  assert.ok(/Implicit: XTB \((USD|EUR)\)/.test(field.placeholder), `placeholder: ${field.placeholder}`);
+  app.click(app.q('#modal-root [data-action="closeModal"]')); await wait(20);
+  await app.nav('settings'); app.click(app.q('[data-action="holdingsRead"]')); await wait(300);
+  assert.equal(acc(app, 'inv_xtb_usd').sheet_broker, 'XTB (USD)', 'salvat explicit → se sincronizează');
+  assert.equal(acc(app, 'inv_xtb').sheet_broker, 'XTB (EUR)');
+  assert.equal(acc(app, 'inv_t212').sheet_broker, 'Trading 212');
+});
+

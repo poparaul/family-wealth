@@ -933,7 +933,8 @@
       case 'select':
         input = `<select ${common} class="input">${f.options.map(([val, label]) => `<option value="${esc(val)}" ${val === v ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select>`; break;
       default:
-        input = `<input ${common} type="text" value="${esc(v)}" ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''} class="input">`;
+        const ph = f.k === 'sheet_broker' && item.platform ? `Implicit: ${defaultBrokerName(item)}` : f.placeholder;
+        input = `<input ${common} type="text" value="${esc(v)}" ${ph ? `placeholder="${esc(ph)}"` : ''} class="input">`;
         if (f.list) input = `<div class="combo">
           <input ${common} type="text" value="${esc(v)}" ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''} data-combo="${f.list}" autocomplete="off" role="combobox" aria-expanded="false" class="input pr-9">
           <button type="button" class="combo-toggle" data-combo-toggle tabindex="-1" aria-label="Arată opțiunile">▾</button>
@@ -2556,6 +2557,10 @@
       if (!(await ensureFileScope())) return;
     }
     const rows = await DriveSync.readSheet(sh.id, `${SHEET_TAB}!A2:J${SHEET_ROWS + 1}`);
+    if (holdingsAccounts().some((a) => !a.sheet_broker)) {
+      const names = new Map(holdingsAccounts().map((a) => [a.id, defaultBrokerName(a)])); // calculate înainte de modificare
+      commit((d) => d.investment_accounts.forEach((a) => { if (!a.sheet_broker && names.has(a.id)) a.sheet_broker = names.get(a.id); }), null, { log: false });
+    }
     settings.lastSheetRead = Date.now(); saveSettings();
     const groups = new Map();
     const bad = [], noRate = new Set();
