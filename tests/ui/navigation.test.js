@@ -23,13 +23,13 @@ test('telefon: bara de jos cu secțiunile principale + „Mai mult” cu restul'
   const app = await boot({ data: makeFamily() });
   const bottom = app.qa('nav.bottom-nav .bottom-item').map((b) => b.textContent.trim().replace(/\s+/g, ' '));
   assert.equal(bottom.length, 5);
-  assert.ok(['Panou', 'Investiții', 'Analiză', 'Copii', 'Mai mult'].every((t, i) => bottom[i].includes(t)), bottom.join(' | '));
+  assert.ok(['Panou', 'Investiții', 'Analiză', 'Bănci', 'Mai mult'].every((t, i) => bottom[i].includes(t)), bottom.join(' | '));
   app.click(app.q('[data-action="toggleMore"]')); await wait(20);
   const more = app.qa('.more-sheet .more-item').map((b) => b.textContent.trim());
-  assert.ok(more.some((t) => t.includes('Bănci')) && more.some((t) => t.includes('Portofoliu')) && more.some((t) => t.includes('Actualizare')) && !more.some((t) => t.includes('Setări')), more.join(' | '));
-  app.click(app.q('.more-sheet [data-view="grandparents"]')); await wait(20);
+  assert.ok(more.some((t) => t.includes('Copii')) && !more.some((t) => t.includes('Bănci')) && more.some((t) => t.includes('Portofoliu')) && more.some((t) => t.includes('Actualizare')) && !more.some((t) => t.includes('Setări')), more.join(' | '));
+  app.click(app.q('.more-sheet [data-view="children"]')); await wait(20);
   assert.ok(!app.q('.more-sheet'), 'panoul se închide după alegere');
-  assert.ok(app.q('nav.bottom-nav [data-action="toggleMore"]').textContent.includes('Bănci'), '„Mai mult” arată secțiunea curentă');
+  assert.ok(app.q('nav.bottom-nav [data-action="toggleMore"]').textContent.includes('Copii'), '„Mai mult” arată secțiunea curentă');
   app.click(app.q('[data-action="toggleMore"]')); await wait(20);
   app.click(app.q('.more-backdrop')); await wait(20);
   assert.ok(!app.q('.more-sheet'), 'click în afară închide panoul');

@@ -170,9 +170,42 @@ test('Panou: categoria „Copii” = tot ce e pe numele copiilor, fără suprapu
   assert.ok(kid.textContent.replace(/\s/g, ' ').includes('45.000'), kid.textContent);
   assert.ok(kid.textContent.includes('3 conturi pe numele lor'));
   const total = num(app.q('.text-4xl').textContent);
-  const sumTiles = tiles.reduce((t, b) => t + num(b.querySelector('p').textContent), 0);
+  const sumTiles = tiles.filter((b) => !b.hasAttribute('data-outside')).reduce((t, b) => t + num(b.querySelector('p').textContent), 0);
   assert.ok(Math.abs(sumTiles - total) <= tiles.length, `tile-urile adunate = totalul (${sumTiles} vs ${total})`);
   assert.ok(app.qa('.pie-wrap path, .pie-wrap circle').some((p) => p.getAttribute('data-tip').startsWith('Copii ·')), 'felie „Copii” în grafic');
   await app.nav('analysis');
   assert.ok(app.q('[data-action="toggleCat"][data-value="children_savings"]').textContent.includes('Economii copii'), 'Analiza păstrează categoriile clasice');
+});
+
+test('imobiliarele și vehiculele nu intră în avere: Panou, istoric, Membri; rămân în tile-uri și în Ghid', async () => {
+  const d = makeFamily();
+  d.real_estate = [{ id: 're_1', title: 'Apartament test', owner_id: 'm_a', share_percentage: 100, estimated_value: 500000, currency: 'RON' }];
+  // fotografie veche (fără `fin`), cu imobiliare + vehicule incluse în total
+  d.history = [{ id: '2020-01', total: 1000000, byMember: { m_a: 700000 }, byCat: { real_estate: 500000, vehicles: 40000 } }];
+  const app = await boot({ data: d, settings: { dashIncludeAll: true } });
+  const num = (t) => parseFloat(t.replace(/[^\d]/g, ''));
+  const Calc = app.w.Calc;
+  const all = Calc.assets(app.stored()).reduce((t, a) => t + a.value, 0);
+  const fin = Calc.netWorth(app.stored()).total;
+  assert.ok(Math.abs(all - fin - 540000) <= 1, 'netWorth fără apartament (500.000) și mașină (40.000)');
+  assert.ok(Math.abs(num(app.q('.text-4xl').textContent) - fin) <= 1, 'Panou = averea financiară');
+  const outside = app.qa('#app section.grid button.card[data-outside]');
+  assert.equal(outside.length, 2, 'tile-uri Imobiliare + Vehicule');
+  assert.ok(outside.every((b) => b.textContent.includes('în afara averii')));
+  assert.ok(outside.some((b) => b.textContent.replace(/\s/g, ' ').includes('500.000')));
+  // salvarea scrie fotografia lunii curente fără ele
+  await app.nav('update');
+  app.q('input[data-q][data-id="inv_xtb"]').value = '250';
+  app.submit(app.q('[data-form="quickUpdate"]')); await app.wait(50);
+  const cur = app.stored().history.find((h) => h.fin);
+  assert.ok(cur && Math.abs(cur.total - Calc.netWorth(app.stored()).total) <= 1, JSON.stringify(cur));
+  assert.equal(cur.byCat.real_estate, undefined);
+  // fotografia veche e corectată în grafic: 1.000.000 − 540.000
+  await app.nav('dashboard');
+  const evo = app.qa('section.card').find((s) => s.textContent.includes('Evoluția'));
+  const tip = evo.querySelector('svg circle title').textContent.replace(/\s/g, ' ');
+  assert.ok(tip.includes('460.000'), tip);
+  await app.nav('guide');
+  assert.ok(app.text().includes('Apartament test') && app.text().includes('Dacia Logan'), 'Ghidul listează tot');
+  assert.equal(app.errors.length, 0, app.errors.join('; '));
 });

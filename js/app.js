@@ -5,7 +5,7 @@
   /* ======================================================================
      CONFIGURARE
      ====================================================================== */
-  const APP_VERSION = 'v43'; // = CACHE din sw.js
+  const APP_VERSION = 'v46'; // = CACHE din sw.js
   const CONFIG = {
     // Opțional: pune aici OAuth Client ID-ul ca să nu-l introduci manual pe fiecare dispozitiv.
     // Ex: '1234567890-abc.apps.googleusercontent.com'
@@ -319,7 +319,8 @@
     const nw = Calc.netWorth(d);
     const id = Calc.monthKey(new Date());
     const round = (o) => Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [k, Math.round(v)]));
-    const rec = { id, total: Math.round(nw.total), byMember: round(nw.byMember), byCat: round(nw.byCat), at: new Date().toISOString() };
+    // fin: 1 = fără imobiliare și vehicule (fotografiile mai vechi le includ; vezi histValue)
+    const rec = { id, total: Math.round(nw.total), byMember: round(nw.byMember), byCat: round(nw.byCat), fin: 1, at: new Date().toISOString() };
     d.history = (d.history || []).filter((h) => h.id !== id).concat([rec]).sort((a, b) => a.id.localeCompare(b.id)).slice(-120);
     updatePortfolioSnapshot(d);
   }
@@ -808,8 +809,10 @@
         { k: 'principal_amount', label: 'Sumă (principal)', type: 'number', req: true, min: 0 },
         { k: 'currency', label: 'Monedă', type: 'currency', req: true },
         { k: 'interest_rate', label: 'Dobândă anuală (%)', type: 'number', min: 0, max: 100 },
-        { k: 'start_date', label: 'Data constituirii', type: 'date', hint: 'Pentru calculul exact al dobânzii' },
-        { k: 'maturity_date', label: 'Data scadenței', type: 'date' },
+        { type: 'row', fields: [
+          { k: 'start_date', label: 'Data constituirii', type: 'date' },
+          { k: 'maturity_date', label: 'Data scadenței', type: 'date' }
+        ] },
         { k: 'tax_rate', label: 'Impozit pe dobândă (%)', type: 'number', min: 0, max: 100, hint: 'Implicit 10% (reținut de bancă)' },
         { k: 'maturity_value', label: 'Valoare la scadență (din contract)', type: 'number', min: 0, hint: 'Opțional — gol = calcul automat' },
         { type: 'preview', id: 'deposit-preview' },
@@ -905,6 +908,8 @@
   function fieldHtml(f, item) {
     const hidden = f.showIf && !showMatch(f.showIf, item.account_type);
     if (f.type === 'accounts') return accountsPickerHtml(f, item);
+    // Două câmpuri unul lângă altul, pe orice ecran (ex. data constituirii + data scadenței)
+    if (f.type === 'row') return `<div class="grid grid-cols-2 gap-3 sm:col-span-2" data-field-row>${f.fields.map((x) => fieldHtml(x, item)).join('')}</div>`;
     const showAttr = f.showIf ? `data-show-if="${f.showIf}"` : '';
     if (f.type === 'preview') return `<div id="${f.id}" class="sm:col-span-2 ${hidden ? 'hidden' : ''}" ${showAttr}>${depositSummaryHtml(item, item.currency)}</div>`;
     if (f.type === 'section') return `<h4 class="sm:col-span-2 mt-2 pt-3 border-t border-slate-100 text-sm font-semibold text-slate-700">${esc(f.label)}</h4>`;
@@ -1065,7 +1070,7 @@
       body, wide: true,
       onSubmit: (form) => {
         const errors = [];
-        schema.fields.filter((f) => f.k).forEach((f) => {
+        schema.fields.flatMap((f) => (f.type === 'row' ? f.fields : [f])).filter((f) => f.k).forEach((f) => {
           if (f.type === 'accounts') { setPath(item, f.k, [...form.querySelectorAll('input[data-accounts]:checked')].map((i) => i.value)); return; }
           const el = form.querySelector(`[data-path="${f.k}"]`);
           if (!el) return;
@@ -1246,8 +1251,8 @@
   }
 
   // Bara de jos (telefon): secțiunile principale + „Mai mult”. Pe ecrane mari: tab-urile de sus.
-  const BOTTOM_ADMIN = ['dashboard', 'investments', 'analysis', 'children'];
-  const BOTTOM_LABEL = { analysis: 'Analiză' }; // etichete scurte pentru bara de jos
+  const BOTTOM_ADMIN = ['dashboard', 'investments', 'analysis', 'grandparents'];
+  const BOTTOM_LABEL = { analysis: 'Analiză', grandparents: 'Bănci' }; // etichete scurte pentru bara de jos
 
   function renderShell(content) {
     const me = currentMember();
@@ -1350,7 +1355,7 @@
   const dashLabel = (c) => (c === 'children_savings' ? 'Copii' : Calc.CATEGORIES[c].label);
   function familyWorth(excluded) {
     const kids = kidIds();
-    const rows = Calc.shareRows(D()).filter((r) => !excluded.has(r.member_id));
+    const rows = Calc.shareRows(D()).filter((r) => Calc.inWorth(r.cat) && !excluded.has(r.member_id));
     const byCat = {}, byMember = {};
     let unallocated = 0;
     rows.forEach((r) => {
@@ -1358,7 +1363,7 @@
       byCat[cat] = (byCat[cat] || 0) + r.value;
       if (r.member_id === Calc.UNALLOCATED) unallocated += r.value; else byMember[r.member_id] = (byMember[r.member_id] || 0) + r.value;
     });
-    const assets = Calc.assets(D()).filter((a) => !a.holders.length || a.holders.some((h) => !excluded.has(h.member_id)));
+    const assets = Calc.assets(D()).filter((a) => Calc.inWorth(a.cat) && (!a.holders.length || a.holders.some((h) => !excluded.has(h.member_id))));
     return { total: sum(rows.map((r) => r.value)), byCat, byMember, unallocated, assets };
   }
 
@@ -1381,7 +1386,7 @@
           <p class="text-teal-100 text-sm">${mine ? `Averea ta (${esc(me.name)})` : 'Avere netă totală a familiei'}${excluded.size ? ` <span class="opacity-80">· fără ${esc(D().family_members.filter((m) => excluded.has(m.id)).map((m) => m.name).join(', '))}</span>` : ''}</p>
           <p class="text-4xl sm:text-5xl font-bold mt-1 tabular-nums">${money(nw.total)}</p>
           ${dispCur() !== baseCur() ? `<p class="text-teal-100 text-sm tabular-nums">≈ ${fmtMoney(nw.total, baseCur())}</p>` : ''}
-          <p class="text-teal-100 text-sm mt-1">${nw.assets.length} active · EUR ${M().exchange_rates.EUR || '—'} · USD ${M().exchange_rates.USD || '—'}</p>
+          <p class="text-teal-100 text-sm mt-1">${nw.assets.length} active · fără imobiliare și vehicule · EUR ${M().exchange_rates.EUR || '—'} · USD ${M().exchange_rates.USD || '—'}</p>
           ${nw.total > 0 ? `<div class="flex h-3 gap-[2px] rounded-full overflow-hidden mt-5">${cats.map((c) => `<div data-tip="${mine ? Calc.CATEGORIES[c].label : dashLabel(c)} · ${esc(money(nw.byCat[c]))} · ${Math.round((nw.byCat[c] / nw.total) * 100)}%" style="flex:${nw.byCat[c]} 0 0;background:${Calc.CATEGORIES[c].color}"></div>`).join('')}</div>
           <ul class="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 mt-4 text-sm">${cats.map((c) => `<li class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full shrink-0 ring-2 ring-white/40" style="background:${Calc.CATEGORIES[c].color}"></span><span class="truncate">${mine ? Calc.CATEGORIES[c].label : dashLabel(c)}</span><span class="ml-auto tabular-nums text-teal-50">${Math.round((nw.byCat[c] / nw.total) * 100)}%</span></li>`).join('')}</ul>` : ''}
           ${missingRates.length ? `<p class="mt-4 text-sm bg-rose-500/30 rounded-lg px-3 py-2">⚠ ${missingRates.length} active au monede fără curs de schimb și nu sunt incluse. Adaugă cursul în Setări.</p>` : ''}
@@ -1403,14 +1408,17 @@
       <section class="grid gap-3 sm:gap-4 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 mt-4">
         ${Object.keys(Calc.CATEGORIES).map((c) => {
           const view = { investment_accounts: 'investments', crypto: 'crypto', grandparents_accounts: 'grandparents', real_estate: 'realestate', children_savings: 'children', vehicles: 'vehicles' }[c];
+          // Imobiliare și vehicule: afișate, dar nu intră în avere
+          const outside = !Calc.inWorth(c);
+          const out = outside ? outsideWorth(mine, excluded) : null;
           // „Copii”: tot ce e pe numele copiilor (orice tip de cont); restul categoriilor fără partea copiilor
           const kids = c === 'children_savings' && !mine ? [...kidIds()] : null;
-          const value = nw.byCat[c] || 0;
-          const count = kids ? nw.assets.filter((a) => a.holders.some((h) => kids.includes(h.member_id))).length : nw.assets.filter((a) => a.cat === c).length;
-          return `<button data-action="nav" data-view="${view}" class="card card-hover text-left w-full min-w-0 h-full block" ${kids ? 'title="Toate conturile și investițiile copiilor"' : ''}>
+          const value = outside ? out.byCat[c] || 0 : nw.byCat[c] || 0;
+          const count = outside ? out.count[c] || 0 : kids ? nw.assets.filter((a) => a.holders.some((h) => kids.includes(h.member_id))).length : nw.assets.filter((a) => a.cat === c).length;
+          return `<button data-action="nav" data-view="${view}" class="card card-hover text-left w-full min-w-0 h-full block" ${kids ? 'title="Toate conturile și investițiile copiilor"' : ''}${outside ? ' data-outside title="Nu intră în averea calculată"' : ''}>
             <span class="block text-xs font-medium truncate" style="color:${Calc.CATEGORIES[c].color}">${kids ? 'Copii' : Calc.CATEGORIES[c].label}</span>
-            <p class="text-lg sm:text-xl font-bold mt-1 tabular-nums truncate">${money(value)}</p>
-            <p class="text-xs text-slate-500 truncate">${count} ${kids ? 'conturi pe numele lor' : 'înregistrări'}</p></button>`;
+            <p class="text-lg sm:text-xl font-bold mt-1 tabular-nums truncate ${outside ? 'text-slate-400' : ''}">${money(value)}</p>
+            <p class="text-xs text-slate-500 truncate">${outside ? 'în afara averii' : `${count} ${kids ? 'conturi pe numele lor' : 'înregistrări'}`}</p></button>`;
         }).join('')}
       </section>
       <div class="grid gap-4 lg:grid-cols-2 mt-4 items-start">
@@ -1425,19 +1433,39 @@
 
   // Totalurile doar pentru partea unui membru (aceeași formă ca Calc.netWorth).
   function myWorth(id) {
-    const rows = Calc.shareRows(D()).filter((r) => r.member_id === id);
+    const rows = Calc.shareRows(D()).filter((r) => Calc.inWorth(r.cat) && r.member_id === id);
     const byCat = {};
     rows.forEach((r) => { byCat[r.cat] = (byCat[r.cat] || 0) + r.value; });
     const total = sum(rows.map((r) => r.value));
-    return { total, byCat, byMember: { [id]: total }, unallocated: 0, assets: Calc.memberAssets(D(), id) };
+    return { total, byCat, byMember: { [id]: total }, unallocated: 0, assets: Calc.memberAssets(D(), id).filter((a) => Calc.inWorth(a.cat)) };
+  }
+
+  // Imobiliare și vehicule (în afara averii), pe categorie — pentru tile-urile de pe Panou.
+  function outsideWorth(mine, excluded) {
+    const byCat = {}, count = {};
+    Calc.shareRows(D()).filter((r) => !Calc.inWorth(r.cat) && (mine ? r.member_id === state.profileId : !excluded.has(r.member_id)))
+      .forEach((r) => { byCat[r.cat] = (byCat[r.cat] || 0) + r.value; });
+    Calc.assets(D()).filter((a) => !Calc.inWorth(a.cat) && (mine ? a.holders.some((h) => h.member_id === state.profileId) : (!a.holders.length || a.holders.some((h) => !excluded.has(h.member_id)))))
+      .forEach((a) => { count[a.cat] = (count[a.cat] || 0) + 1; });
+    return { byCat, count };
+  }
+
+  // Fotografiile lunare mai vechi (fără `fin`) includ imobiliarele și vehiculele: le scădem.
+  // Pe membru nu știm partea lor din trecut, așa că folosim partea de azi (se schimbă rar).
+  function histValue(h, memberId) {
+    if (h.fin) return memberId ? (h.byMember || {})[memberId] || 0 : h.total;
+    const bc = h.byCat || {};
+    if (!memberId) return h.total - Calc.WORTH_EXCLUDED.reduce((t, c) => t + (bc[c] || 0), 0);
+    const now = sum(Calc.shareRows(D()).filter((r) => !Calc.inWorth(r.cat) && r.member_id === memberId).map((r) => r.value));
+    return Math.max(0, ((h.byMember || {})[memberId] || 0) - now);
   }
 
   function historyCard(nw, mine, excluded = new Set()) {
     const me = state.profileId;
     const cur = Calc.monthKey(new Date());
-    const minus = (h) => [...excluded].reduce((t, id) => t + ((h.byMember || {})[id] || 0), 0);
+    const minus = (h) => [...excluded].reduce((t, id) => t + histValue(h, id), 0);
     const pts = (D().history || []).filter((h) => h.id !== cur)
-      .map((h) => ({ date: h.id + '-01', balance: mine ? (h.byMember || {})[me] || 0 : h.total - minus(h) }));
+      .map((h) => ({ date: h.id + '-01', balance: mine ? histValue(h, me) : histValue(h) - minus(h) }));
     pts.push({ date: cur + '-01', balance: nw.total });
     const shown = pts.map((p) => ({ date: p.date, balance: conv(p.balance) }));
     const last = pts[pts.length - 1].balance, prev = pts.length > 1 ? pts[pts.length - 2].balance : null;
@@ -1530,7 +1558,7 @@
 
   function renderViewerDashboard() {
     const me = currentMember();
-    const list = Calc.memberAssets(D(), me.id);
+    const list = Calc.memberAssets(D(), me.id).filter((a) => Calc.inWorth(a.cat));
     const total = sum(list.map((a) => a.share));
     return `
       <div class="card bg-gradient-to-br from-teal-700 to-teal-900 text-white border-0 viewer-xl">
@@ -1590,7 +1618,7 @@
   const pctTxt = (v, total) => (total ? `${((v / total) * 100).toFixed(1)}%` : '0%');
 
   // Imobiliarele și vehiculele nu intră în Analiza averii (doar active financiare).
-  const ANALYSIS_EXCLUDED = ['real_estate', 'vehicles'];
+  const ANALYSIS_EXCLUDED = Calc.WORTH_EXCLUDED;
   const ANALYSIS_CATS = Object.keys(Calc.CATEGORIES).filter((c) => !ANALYSIS_EXCLUDED.includes(c));
   const analysisBaseRows = () => Calc.shareRows(D()).filter((r) => ANALYSIS_CATS.includes(r.cat));
 
@@ -2129,7 +2157,8 @@
   /* ---------- Ghid urgență ---------- */
   function renderGuide() {
     const g = D().emergency_guide;
-    const nw = Calc.netWorth(D());
+    // Inventarul listează tot (inclusiv imobiliare și vehicule, pentru succesiune); totalul = averea financiară.
+    const nw = Object.assign({}, Calc.netWorth(D()), { assets: Calc.assets(D()) });
     const cats = Object.keys(Calc.CATEGORIES);
     const detail = (c, id) => {
       const it = D()[colOf(c)].find((x) => x.id === id) || {};
@@ -2159,7 +2188,7 @@
       </section>
       <section class="card mt-4">
         <h3 class="font-semibold mb-1">Inventarul patrimoniului</h3>
-        <p class="text-sm text-slate-500 mb-4">Generat automat · Total ${money(nw.total)} · ${new Date().toLocaleDateString('ro-RO')}</p>
+        <p class="text-sm text-slate-500 mb-4">Generat automat · Avere (fără imobiliare și vehicule) ${money(nw.total)} · ${new Date().toLocaleDateString('ro-RO')}</p>
         ${cats.filter((c) => nw.assets.some((a) => a.cat === c)).map((c) => `<h4 class="text-sm font-semibold mt-4 mb-1" style="color:${Calc.CATEGORIES[c].color}">${Calc.CATEGORIES[c].label}</h4>
           <ul class="divide-y divide-slate-100 text-sm">${nw.assets.filter((a) => a.cat === c).map((a) => `<li class="py-2">
             <div class="flex justify-between gap-3"><span class="font-medium">${esc(a.label)}</span><span class="tabular-nums font-semibold whitespace-nowrap">${money(a.value)}</span></div>
@@ -2535,10 +2564,9 @@
     const profit = P.total - P.cost, pctAll = P.cost ? (profit / P.cost) * 100 : null;
     const sign = (v) => (masked() ? '••' : (v >= 0 ? '+' : '−') + money(Math.abs(v)));
     const stat = (label, val, cls = '') => `<div class="card"><p class="text-xs text-slate-500">${label}</p><p class="text-xl font-bold mt-1 tabular-nums ${cls}">${val}</p></div>`;
-    const byBroker = new Map(), byCur = new Map();
+    const byBroker = new Map();
     P.items.forEach((i) => {
       i.brokers.forEach((b) => { const g = byBroker.get(b.name) || { key: b.name, value: 0 }; g.value += b.bValue; byBroker.set(b.name, g); });
-      const g = byCur.get(i.currency) || { key: i.currency, value: 0, native: 0 }; g.value += i.bValue; g.native += i.priced ? i.value : 0; byCur.set(i.currency, g);
     });
     const donut = (title, groups, dim) => {
       const sl = foldSlices(sortGroups([...groups.values()], dim, 'value'), dim);
@@ -2546,7 +2574,6 @@
         const names = [...groups.keys()].sort((a, b) => a.localeCompare(b, 'ro'));
         sl.forEach((x) => { if (x.key !== '__other') { const ix = names.indexOf(x.key); x.meta = { label: x.key, color: ix >= 0 && ix < Calc.PALETTE.length ? Calc.PALETTE[ix] : Calc.OTHER_COLOR }; } });
       }
-      if (dim === 'currency') sl.forEach((x) => { const g = groups.get(x.key); if (g && x.key !== '__other') x.native = g.native; }); // felia USD în $, EUR în €
       return `<section class="card"><h3 class="font-semibold mb-3">${title}</h3><div class="grid gap-4 sm:grid-cols-[10rem_1fr] items-center">
         <div class="mx-auto w-40 max-w-full">${donutSvg(sl, P.total, 'Acțiuni')}</div>${pieLegend(sl, P.total)}</div></section>`;
     };
@@ -2559,7 +2586,7 @@
         ${stat('Numerar în conturi', money(P.cash))}
       </div>
       <div class="grid gap-4 lg:grid-cols-2 mt-4">${profitBarsCard(P)}${profitLineCard()}</div>
-      <div class="grid gap-4 lg:grid-cols-2 mt-4">${donut('Pe broker', byBroker, 'institution')}${donut('Pe monedă', byCur, 'currency')}</div>
+      <div class="mt-4">${donut('Pe broker', byBroker, 'institution')}</div>
       <section class="card mt-4">
         <h3 class="font-semibold mb-3">Toate pozițiile</h3>
         <div class="overflow-x-auto -mx-1"><table class="matrix w-full text-xs sm:text-sm">

@@ -157,3 +157,18 @@ test('formulare cu sumele ascunse: sumele goale rămân neschimbate, procentele 
   assert.ok(app.stored().grandparents_accounts.find((a) => a.id === 'bank_rf').principal_amount > 30000, 'capitalizat');
 });
 
+
+test('depozit bancar: data constituirii și data scadenței stau una lângă alta și se salvează', async () => {
+  const app = await boot({ data: makeFamily() });
+  const f = await editCard(app, 'grandparents', 'Revolut');
+  const row = f.querySelector('[data-field-row]');
+  assert.ok(row && row.classList.contains('grid-cols-2'), 'rând cu 2 coloane și pe telefon');
+  assert.deepEqual([...row.querySelectorAll('[data-path]')].map((el) => el.dataset.path), ['start_date', 'maturity_date']);
+  f.querySelector('[data-path="start_date"]').value = '2026-01-10';
+  f.querySelector('[data-path="maturity_date"]').value = '2027-01-10';
+  app.submit(f); await wait(50);
+  const x = app.stored().grandparents_accounts.find((a) => a.id === 'bank_rev_i');
+  assert.equal(x.start_date, '2026-01-10');
+  assert.equal(x.maturity_date, '2027-01-10');
+  assert.equal(app.errors.length, 0, app.errors.join('; '));
+});

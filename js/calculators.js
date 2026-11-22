@@ -173,8 +173,12 @@
     return rows;
   }
 
+  // Imobiliarele și vehiculele nu intră în avere (doar active financiare); rămân listate separat.
+  const WORTH_EXCLUDED = ['real_estate', 'vehicles'];
+  const inWorth = (cat) => !WORTH_EXCLUDED.includes(cat);
+
   function netWorth(data) {
-    const list = assets(data);
+    const list = assets(data).filter((a) => inWorth(a.cat));
     const byMember = {};
     const byCat = {};
     let total = 0;
@@ -346,7 +350,7 @@
     baseCurrency, rateKnown, toBase, shareRows,
     splitsTotal, validateSplits, equalSplit,
     todayISO, monthKey, parseDate, daysUntil, alertLevel,
-    assets, netWorth, memberAssets,
+    assets, netWorth, memberAssets, WORTH_EXCLUDED, inWorth,
     vehicleAlerts, childReminders, maturityAlerts,
     bonusProgress, vehicleAnnualCost, annualInterest, depositReturn, isDeposit, isBond, incomeSchedule, DEFAULT_INTEREST_TAX,
     formatMoney, formatDate, formatDays

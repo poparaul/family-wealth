@@ -26,7 +26,7 @@ test('portofoliu: același simbol la doi brokeri apare o dată, cu preț mediu p
   assert.equal(rows[0].querySelector('td .font-medium').textContent, 'NASDAQ:TSLA', 'implicit: cea mai mare valoare prima');
   assert.equal(rows[rows.length - 1].querySelector('td .font-medium').textContent, 'BVB:XYZ', 'fără preț la final');
   const sections = app.qa('#app section.card h3').map((h) => h.textContent);
-  assert.ok(sections.includes('Pe broker') && sections.includes('Pe monedă'));
+  assert.ok(sections.includes('Pe broker') && !sections.includes('Pe monedă'), 'fără graficul pe monedă');
   assert.ok(app.text().includes('Numerar în conturi'));
   app.click(app.q('[data-action="sortPortfolio"][data-value="symbol"]')); await wait(20);
   assert.equal(app.qa('#app table.matrix tbody tr')[0].querySelector('td .font-medium').textContent, 'BVB:XYZ', 'sortare A→Z');
@@ -68,22 +68,6 @@ test('grafice de profit: bare pe simbol (câștig/pierdere) și evoluția din fo
   const h = app.stored().pf_history;
   assert.equal(h.length, 3);
   assert.ok(h[2].value > 0 && h[2].cost > 0 && h[2].byMember.m_a && h[2].byMember.m_i, 'total și pe membri');
-});
-
-test('graficul „Pe monedă”: fiecare felie în moneda ei, indiferent de moneda selectată sus', async () => {
-  const d = withHoldings();
-  Object.assign(d.investment_accounts.find((a) => a.id === 'inv_rev').holdings[1], { price: 10, value: 30 }); // BVB:XYZ 3 × 10 RON
-  const app = await boot({ data: d });
-  await app.nav('portfolio');
-  app.click(app.q('[data-action="setDisplayCurrency"][data-value="EUR"]')); await wait(20);
-  const card = app.qa('#app section.card').find((s) => s.querySelector('h3') && s.querySelector('h3').textContent === 'Pe monedă');
-  const rows = [...card.querySelectorAll('ul li')].map((li) => li.textContent.replace(/\s+/g, ' ').trim());
-  const usd = rows.find((r) => r.startsWith('USD')), ron = rows.find((r) => r.startsWith('RON')), eur = rows.find((r) => r.startsWith('EUR'));
-  assert.ok(usd && /3\.000 USD/.test(usd), `USD în dolari: ${usd}`);       // (7 + 5) × 250
-  assert.ok(ron && /30 RON/.test(ron), `RON în lei: ${ron}`);
-  assert.ok(eur && /1\.200 EUR/.test(eur), `EUR în euro: ${eur}`);
-  const pct = rows.map((r) => parseFloat(r.match(/([\d.]+)%$/)[1]));
-  assert.ok(Math.abs(pct.reduce((a, b) => a + b, 0) - 100) < 0.5, 'procentele însumează 100%');
 });
 
 test('„Pe broker”: o felie pe cont, fără gri; costul simbolurilor fără preț nu scade profitul', async () => {
