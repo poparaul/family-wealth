@@ -5,7 +5,7 @@
   /* ======================================================================
      CONFIGURARE
      ====================================================================== */
-  const APP_VERSION = 'v46'; // = CACHE din sw.js
+  const APP_VERSION = 'v47'; // = CACHE din sw.js
   const CONFIG = {
     // Opțional: pune aici OAuth Client ID-ul ca să nu-l introduci manual pe fiecare dispozitiv.
     // Ex: '1234567890-abc.apps.googleusercontent.com'
@@ -790,7 +790,7 @@
         { k: 'sheet_broker', label: 'Nume în sheet-ul de dețineri', type: 'text', showIf: 'stocks', hint: 'Exact ca în coloana Broker din Google Sheets (implicit: platforma)' },
         { k: 'currency', label: 'Monedă', type: 'currency', req: true },
         { k: 'interest_rate', label: 'Dobândă / cupon anual (%)', type: 'number', min: 0, max: 100, showIf: 'income' },
-        { k: 'start_date', label: 'Data constituirii', type: 'date', showIf: 'deposit' },
+        { k: 'start_date', label: 'Data constituirii / cumpărării', type: 'date', showIf: 'income', hint: 'La titluri de stat: pentru profitul de până azi' },
         { k: 'maturity_date', label: 'Data scadenței', type: 'date', showIf: 'income', hint: 'La titluri de stat: cuponul se plătește anual la această zi' },
         { k: 'tax_rate', label: 'Impozit pe dobândă (%)', type: 'number', min: 0, max: 100, hint: 'Depozite: implicit 10%. Fidelis / Tezaur: 0% (scutite)', showIf: 'income' },
         { k: 'maturity_value', label: 'Valoare la scadență (din contract)', type: 'number', min: 0, hint: 'Opțional — gol = calcul automat', showIf: 'deposit' },
@@ -1917,6 +1917,18 @@
     return pct > 0 && pct < 99.99 ? `<p class="text-sm mt-1"><span class="badge bg-teal-50 text-teal-800">Partea ta ${Math.round(pct * 100) / 100}%: ${money(base * pct / 100)}</span></p>` : '';
   }
 
+  // Titluri de stat: profitul din cupoane de la cumpărare până azi (calculat din dobândă și timpul trecut).
+  function bondProfitHtml(a) {
+    if (!(Calc.num(a.interest_rate) > 0)) return '';
+    const r = Calc.bondAccrued(a);
+    if (!r) return isAdmin() ? '<p class="text-xs text-slate-500 mt-2">Adaugă data cumpărării (✎) ca să vezi profitul de până azi.</p>' : '';
+    const parts = [r.coupons ? `${money(r.paid, a.currency)} încasat (${r.coupons} ${r.coupons === 1 ? 'cupon' : 'cupoane'})` : '', !r.matured ? `${money(r.accrued, a.currency)} acumulat de la ultimul cupon` : ''].filter(Boolean);
+    return `<div class="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm" data-bond-profit>
+      <div class="flex items-baseline justify-between gap-2"><span class="text-slate-600">${r.matured ? 'Profit total (până la scadență)' : 'Profit până azi'}</span>
+        <span class="font-semibold tabular-nums text-emerald-700">+${money(r.net, a.currency)} <span class="text-xs font-normal">(${r.pct.toFixed(2)}%)</span></span></div>
+      <p class="text-xs text-slate-500 mt-0.5">${r.days} zile de la cumpărare${parts.length ? ' · ' + parts.join(' · ') : ''}</p></div>`;
+  }
+
   /* ---------- Investiții ---------- */
   function renderInvestments({ crypto = false } = {}) {
     const mine = mineOnly();
@@ -1936,7 +1948,7 @@
           ${myShareLine(a, base)}
           ${Calc.isBond(a.account_type) && (Calc.num(a.interest_rate) > 0 || a.maturity_date) ? `<dl class="grid grid-cols-2 gap-2 mt-3 text-sm">
             <div class="stat"><dt>Cupon anual</dt><dd>${Calc.num(a.interest_rate)}%${Calc.num(a.interest_rate) > 0 ? ` · ${money(Calc.num(a.total_value) * Calc.num(a.interest_rate) / 100 * (1 - (a.tax_rate == null || a.tax_rate === '' ? 0 : Calc.num(a.tax_rate)) / 100), a.currency)} net` : ''}</dd></div>
-            <div class="stat"><dt>Scadență</dt><dd>${Calc.formatDate(a.maturity_date)}</dd></div></dl>` : ''}
+            <div class="stat"><dt>Scadență</dt><dd>${Calc.formatDate(a.maturity_date)}</dd></div></dl>${bondProfitHtml(a)}` : ''}
           ${Calc.isDeposit(a.account_type) && (Calc.num(a.interest_rate) > 0 || a.maturity_date) ? `<dl class="grid grid-cols-2 gap-2 mt-3 text-sm">
             <div class="stat"><dt>Dobândă</dt><dd>${Calc.num(a.interest_rate)}% / an</dd></div>
             <div class="stat"><dt>Scadență</dt><dd>${Calc.formatDate(a.maturity_date)}${Calc.daysUntil(a.maturity_date) != null ? ` <span class="badge bg-slate-100 text-slate-600">${Calc.daysUntil(a.maturity_date) < 0 ? 'scadent' : Calc.formatDays(Calc.daysUntil(a.maturity_date))}</span>` : ''}</dd></div>

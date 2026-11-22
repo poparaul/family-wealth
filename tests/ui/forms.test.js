@@ -37,7 +37,7 @@ test('investiție: câmpurile de cupon apar la titluri de stat, cele de depozit 
   assert.ok(!visible('interest_rate') && !visible('start_date'), 'acțiuni: ascunse');
   const type = f.querySelector('[data-path="account_type"]');
   type.value = 'Titluri de stat (Fidelis / Tezaur)'; type.dispatchEvent(new app.w.Event('input', { bubbles: true })); await wait(10);
-  assert.ok(visible('interest_rate') && visible('maturity_date') && visible('tax_rate') && !visible('start_date'), 'titluri: cupon + scadență');
+  assert.ok(visible('interest_rate') && visible('maturity_date') && visible('tax_rate') && visible('start_date') && !visible('maturity_value'), 'titluri: cupon + scadență + data cumpărării');
   type.value = 'Depozit la termen'; type.dispatchEvent(new app.w.Event('input', { bubbles: true })); await wait(10);
   assert.ok(visible('start_date') && visible('maturity_value'), 'depozit: toate câmpurile');
 });
@@ -170,5 +170,26 @@ test('depozit bancar: data constituirii și data scadenței stau una lângă alt
   const x = app.stored().grandparents_accounts.find((a) => a.id === 'bank_rev_i');
   assert.equal(x.start_date, '2026-01-10');
   assert.equal(x.maturity_date, '2027-01-10');
+  assert.equal(app.errors.length, 0, app.errors.join('; '));
+});
+
+test('titluri de stat (Tradeville): profitul până azi apare pe card, din data cumpărării', async () => {
+  const d = makeFamily();
+  const app = await boot({ data: d });
+  await app.nav('investments');
+  const card = () => app.qa('#app article.card').find((a) => a.textContent.includes('Tradeville') && a.textContent.includes('6.5%'));
+  assert.ok(card().textContent.includes('Adaugă data cumpărării'), 'fără dată: îndemn');
+  app.click(card().querySelector('[data-action="edit"]')); await wait(60);
+  const f = app.modal();
+  const start = f.querySelector('[data-path="start_date"]');
+  assert.ok(!start.closest('label').classList.contains('hidden'), 'data cumpărării vizibilă la titluri de stat');
+  const past = new Date(); past.setDate(past.getDate() - 400);
+  start.value = `${past.getFullYear()}-${String(past.getMonth() + 1).padStart(2, '0')}-${String(past.getDate()).padStart(2, '0')}`;
+  app.submit(f); await wait(60);
+  const box = card().querySelector('[data-bond-profit]');
+  assert.ok(box, 'blocul de profit');
+  const txt = box.textContent.replace(/\s+/g, ' ');
+  assert.ok(txt.includes('Profit până azi') && txt.includes('400 zile'), txt);
+  assert.ok(txt.includes('427 EUR') || txt.includes('428 EUR'), `6.000 × 6,5% × 400/365 ≈ 427 EUR: ${txt}`);
   assert.equal(app.errors.length, 0, app.errors.join('; '));
 });

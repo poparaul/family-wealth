@@ -323,6 +323,27 @@
     return { principal, rate, days, estimated, taxPct, gross, tax, net, value, manual };
   }
 
+  /** Titluri de stat: dobânda câștigată de la cumpărare până azi (sau până la scadență), netă de impozit.
+   *  Cupoanele se plătesc anual la ziua/luna scadenței; restul e acumulat de la ultimul cupon. */
+  function bondAccrued(acc, today = new Date()) {
+    const start = parseDate(acc.start_date), mat = parseDate(acc.maturity_date);
+    const rate = num(acc.interest_rate), principal = num(acc.total_value);
+    if (!start || !(rate > 0)) return null;
+    const now = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const end = mat && mat < now ? mat : now;
+    const days = Math.max(0, Math.round((end - start) / 86400000));
+    const taxPct = acc.tax_rate == null || acc.tax_rate === '' ? 0 : num(acc.tax_rate); // Fidelis/Tezaur: neimpozabile
+    const net = (principal * rate / 100) * (days / 365) * (1 - taxPct / 100);
+    const couponNet = (principal * rate / 100) * (1 - taxPct / 100);
+    let coupons = 0;
+    if (mat) for (let y = start.getFullYear(); y <= end.getFullYear(); y++) {
+      const c = new Date(y, mat.getMonth(), mat.getDate());
+      if (c > start && c <= end) coupons++;
+    }
+    const paid = Math.min(net, coupons * couponNet);
+    return { days, net, paid, coupons, accrued: Math.max(0, net - paid), pct: principal ? (net / principal) * 100 : 0, matured: !!(mat && mat <= now) };
+  }
+
   /* ---------- Formatare ---------- */
   function formatMoney(v, cur = 'RON', decimals = 0) {
     try {
@@ -352,7 +373,7 @@
     todayISO, monthKey, parseDate, daysUntil, alertLevel,
     assets, netWorth, memberAssets, WORTH_EXCLUDED, inWorth,
     vehicleAlerts, childReminders, maturityAlerts,
-    bonusProgress, vehicleAnnualCost, annualInterest, depositReturn, isDeposit, isBond, incomeSchedule, DEFAULT_INTEREST_TAX,
+    bonusProgress, vehicleAnnualCost, annualInterest, depositReturn, bondAccrued, isDeposit, isBond, incomeSchedule, DEFAULT_INTEREST_TAX,
     formatMoney, formatDate, formatDays
   };
 })(window);

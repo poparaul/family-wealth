@@ -47,3 +47,22 @@ test('paleta pentru tema întunecată se comută în loc (culorile categoriilor 
   Calc.setDarkPalette(false);
   assert.equal(Calc.CATEGORIES.investment_accounts.color, light);
 });
+
+test('titluri de stat: profit până azi din cupon și zilele trecute (cupoane încasate + acumulat)', () => {
+  const acc = { total_value: 10000, interest_rate: 6, start_date: '2025-03-01', maturity_date: '2028-03-01', tax_rate: 0 };
+  const r = Calc.bondAccrued(acc, new Date(2026, 8, 1)); // 1 sept. 2026
+  assert.equal(r.days, 549);
+  assert.equal(Math.round(r.net), Math.round(10000 * 0.06 * 549 / 365)); // 902
+  assert.equal(r.coupons, 1, 'cuponul din 1 martie 2026');
+  assert.equal(Math.round(r.paid), 600);
+  assert.equal(Math.round(r.accrued), 302);
+  assert.equal(r.matured, false);
+  // după scadență: se oprește la scadență
+  const done = Calc.bondAccrued(acc, new Date(2030, 0, 1));
+  assert.equal(done.matured, true);
+  assert.equal(done.coupons, 3);
+  assert.equal(Math.round(done.net), Math.round(10000 * 0.06 * done.days / 365));
+  // impozit 10% (ex. obligațiuni corporative)
+  assert.equal(Math.round(Calc.bondAccrued(Object.assign({}, acc, { tax_rate: 10 }), new Date(2026, 8, 1)).net), Math.round(902.47 * 0.9));
+  assert.equal(Calc.bondAccrued(Object.assign({}, acc, { start_date: null })), null, 'fără data cumpărării: nu se calculează');
+});
